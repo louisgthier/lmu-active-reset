@@ -360,6 +360,9 @@ class Runtime extends EventEmitter {
     const name = `gui-${path.basename(this.session)}`;
     const preferences = this.getSettings();
     const args = [
+      "-B",
+      "-X",
+      "utf8",
       path.join(this.root, "scripts/sector.py"),
       "runtime.start_reset_hotkeys",
       "--pid",

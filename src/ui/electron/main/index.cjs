@@ -463,6 +463,9 @@ function installBridge() {
         audioReady = promisify(execFile)(
           resolvePython(),
           [
+            "-B",
+            "-X",
+            "utf8",
             path.join(root, "scripts/sector.py"),
             "desktop.reset_feedback",
             directory,

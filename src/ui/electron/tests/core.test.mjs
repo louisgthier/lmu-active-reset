@@ -149,6 +149,7 @@ test("waits for LMU, launches exactly once per process identity and passes safe 
   assert.equal(spawned.length, 1);
   const [python, args, options] = spawned[0].args;
   assert.ok(python);
+  assert.deepEqual(args.slice(0, 3), ["-B", "-X", "utf8"]);
   assert.ok(args.includes("--gui-session"));
   assert.ok(args.includes("--allow-writes"));
   assert.equal(options.windowsHide, true);
