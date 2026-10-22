@@ -49,7 +49,7 @@ def verify_telemetry(pid):
     if hashlib.sha256(content).hexdigest() != contract["sha256"]:
         raise ValueError("UI contract changed")
     binary = PROJECT / "bin/diagnostic-14200.exe"
-    if hashlib.sha256(binary.read_bytes()).hexdigest().upper() != profile["diagnostic_sha256"]:
+    if hashlib.sha256(binary.read_bytes()).hexdigest() != profile["diagnostic_sha256"].lower():
         raise ValueError("Diagnostic binary changed")
     state = get_json("/navigation/state")["state"]
     if (
