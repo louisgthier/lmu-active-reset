@@ -50,5 +50,7 @@ export function keyFromEvent(event, keys) {
 }
 
 export function keyLabel(name, keys) {
+  const wheel = /^WHEEL:([0-9A-F]{32}):([1-9][0-9]{0,2})$/i.exec(name);
+  if (wheel) return `Wheel ${wheel[1].slice(0, 4)} · Button ${wheel[2]}`;
   return keys.find((key) => key.name === name)?.label || name;
 }

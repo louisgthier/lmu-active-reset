@@ -29,7 +29,7 @@ def driving_ready(state, game):
 
 
 def wait_for_driving(stop_requested=lambda: False, stable_samples=1):
-    print("Waiting for driving in offline Practice…", flush=True)
+    print("Waiting for driving in offline Practiceâ€¦", flush=True)
     consecutive = 0
     while not stop_requested():
         try:
@@ -58,7 +58,7 @@ def supervise(args, run_host, audit_host, alive, wait=wait_for_driving, sleep=ti
         args.desktop.publish(phase="waiting", checkpoint=False, readiness="Waiting for driving")
         if not wait(stopped, stable_samples=2):
             break
-        args.desktop.publish(phase="starting", message="Connecting to LMU…")
+        args.desktop.publish(phase="starting", message="Connecting to LMUâ€¦")
         for attempt in range(20):
             if stopped():
                 return
@@ -94,12 +94,12 @@ def main():
     if not args.gui_session or not args.offline_launch_confirmed or not args.allow_writes:
         parser.error("Offline launch confirmation and write opt-in required")
     from sector.desktop.reset_desktop_session import DesktopSession
-    from sector.runtime.physical_reset_hotkeys import virtual_key
+    from sector.runtime.physical_reset_hotkeys import input_binding
 
     args.desktop = DesktopSession(args.gui_session, settings_file=args.settings_file, require_lease=True, pid=args.pid)
     handle = None
     try:
-        if virtual_key(args.save_key) == virtual_key(args.restore_key):
+        if input_binding(args.save_key) == input_binding(args.restore_key):
             raise ValueError("Choose different keys for save and restore.")
         from sector.observers.audit_snapshot_25661166 import audit
         from sector.runtime.reset_host_runner import run, process_exit_code, k

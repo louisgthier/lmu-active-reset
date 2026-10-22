@@ -160,21 +160,21 @@ class DesktopSession:
         if self.request:
             self.request_native_id = request_id
         if action == 1:
-            self.publish(message="Saving checkpoint…", reset_action=1)
+            self.publish(message="Saving checkpointâ€¦", reset_action=1)
         elif action == 2:
-            self.publish(message="Preparing restore…", reset_action=2)
+            self.publish(message="Preparing restoreâ€¦", reset_action=2)
         elif action == 3:
-            self.publish(message="Restoring checkpoint…", reset_action=3)
+            self.publish(message="Restoring checkpointâ€¦", reset_action=3)
 
     def settings(self):
-        from sector.runtime.physical_reset_hotkeys import virtual_key
+        from sector.runtime.physical_reset_hotkeys import input_binding
 
         if not self.settings_file:
             return None
         try:
             settings = json.loads(self.settings_file.read_text(encoding="utf-8-sig"))
             save, restore = settings["save_key"], settings["restore_key"]
-            if virtual_key(save) == virtual_key(restore) or type(settings["sound"]) is not bool:
+            if input_binding(save) == input_binding(restore) or type(settings["sound"]) is not bool:
                 return None
             return save.upper(), restore.upper(), settings["sound"]
         except (OSError, ValueError, KeyError, TypeError, AttributeError):

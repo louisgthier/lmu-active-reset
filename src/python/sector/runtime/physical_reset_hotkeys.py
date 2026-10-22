@@ -183,13 +183,31 @@ class WindowsKeys:
         pid = self.w.DWORD()
         self.user.GetWindowThreadProcessId(self.user.GetForegroundWindow(), self.c.byref(pid))
 
+        from sector.runtime.wheel_buttons import DirectInputButtons, binding_down
+
+        snapshot = {}
+        valid = True
+        if any(isinstance(binding, tuple) for binding in (self.save_vk, self.restore_vk)):
+            try:
+                if not getattr(self, "wheel", None):
+                    self.wheel = DirectInputButtons()
+                snapshot = self.wheel.snapshot()
+            except (OSError, ValueError):
+                valid = False
+
         def down(vk):
+            nonlocal valid
+            if isinstance(vk, tuple):
+                value = binding_down(vk, snapshot)
+                valid = valid and value is not None
+                return bool(value)
             return bool(self.user.GetAsyncKeyState(vk) & 0x8000)
 
+        save, restore = down(self.save_vk), down(self.restore_vk)
         return (
-            pid.value == self.pid,
-            down(self.save_vk),
-            down(self.restore_vk),
+            pid.value == self.pid and valid,
+            save,
+            restore,
             any(down(vk) for vk in (0x10, 0x11, 0x12, 0x5B, 0x5C)),
         )
 
@@ -201,3 +219,10 @@ def virtual_key(name):
     if not isinstance(name, str) or name.upper() not in KEY_CODES:
         raise ValueError("Choose a supported single keyboard key")
     return KEY_CODES[name.upper()]
+
+
+def input_binding(name):
+    """Resolve a keyboard key or a device-specific wheel button."""
+    from sector.runtime.wheel_buttons import wheel_binding
+
+    return wheel_binding(name) or virtual_key(name)

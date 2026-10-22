@@ -17,16 +17,19 @@ const defaults = Object.freeze({
 function validateSettings(value) {
   const find = (name) =>
     typeof name === "string" &&
-    keys.find((key) => key.name.toUpperCase() === name.toUpperCase());
+    (keys.find((key) => key.name.toUpperCase() === name.toUpperCase()) ||
+      (/^WHEEL:[0-9A-F]{32}:([1-9][0-9]{0,2})$/.test(name.toUpperCase()) &&
+        Number(name.split(":")[2]) <= 128 && { name: name.toUpperCase() }));
   const save = find(value?.save_key);
   const restore = find(value?.restore_key);
   if (
     !save ||
     !restore ||
-    save.virtual_key === restore.virtual_key ||
+    save.name.toUpperCase() === restore.name.toUpperCase() ||
+    (save.virtual_key !== undefined && save.virtual_key === restore.virtual_key) ||
     typeof value?.sound !== "boolean"
   ) {
-    throw new Error("Choose two different keys without modifiers.");
+    throw new Error("Choose two different keyboard keys or wheel buttons.");
   }
   if (
     value.reduce_motion !== undefined &&

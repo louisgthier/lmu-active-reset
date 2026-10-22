@@ -23,6 +23,7 @@ const { OfflineSafety } = require("./offline-safety.cjs");
 const { waitForGameExit } = require("./clean-restart.cjs");
 const { resetAccess } = require("./reset-access.cjs");
 const { Diagnostics } = require("./diagnostics.cjs");
+const { WheelCapture } = require("./wheel-capture.cjs");
 const {
   defaults,
   keys,
@@ -157,6 +158,8 @@ let tray;
 let quitting = false;
 let canQuit = false;
 let audioReady;
+let previewWheelBinding;
+const wheelCapture = new WheelCapture({ root, python: resolvePython() });
 let overlays;
 // Keep this in the main process so hiding, restoring or reloading cannot replay it.
 let launchAnimationPending = true;
@@ -182,6 +185,7 @@ function showWindow() {
 async function quit() {
   if (quitting) return;
   quitting = true;
+  wheelCapture.cancel();
   showWindow();
   try {
     overlays?.stop();
@@ -211,6 +215,19 @@ function handle(channel, callback) {
 }
 
 function installBridge() {
+  handle("sector:wheel-capture", async () => {
+    if (quitting || !window.isFocused())
+      return { ok: false, error: "Focus Sector to bind a wheel button." };
+    if (preview)
+      return smoke && previewWheelBinding
+        ? { ok: true, binding: previewWheelBinding }
+        : { ok: false, error: "Hardware capture is unavailable in preview." };
+    return wheelCapture.capture();
+  });
+  handle("sector:wheel-cancel", () => {
+    wheelCapture.cancel();
+    return { ok: true };
+  });
   handle("sector:diagnostics-export", async () => {
     const selected = await dialog.showSaveDialog(window, {
       title: "Export Sector diagnostics",
@@ -675,6 +692,9 @@ if (!app.requestSingleInstanceLock()) {
           show: showWindow,
           window: () => window,
           hasListener: () => Boolean(runtime.child || runtime.timer),
+          wheelBinding: (binding) => {
+            previewWheelBinding = binding;
+          },
           observeGame: (games) => gameLauncher.observe(games),
           overlays: () => overlays,
         };

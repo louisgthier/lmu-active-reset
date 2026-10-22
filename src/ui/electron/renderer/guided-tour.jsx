@@ -20,8 +20,8 @@ export function GuidedTour({ saveKey, restoreKey, onTabChange, onFinish }) {
     },
     {
       target: "shortcuts",
-      title: "Make the keys yours",
-      text: "Click a shortcut, then press its new key. Choose unused game bindings. Return to LMU and release both keys before using them.",
+      title: "Choose your shortcuts",
+      text: "Click a shortcut, then press a key or choose Bind wheel button. Release all wheel buttons before capturing one. Choose unused game bindings. Return to LMU and release both shortcuts before using them.",
       side: "top",
     },
     {

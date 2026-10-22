@@ -229,7 +229,7 @@ def run(args):
         HotkeyCommands,
         WindowsKeys,
         expected_restore_fields,
-        virtual_key,
+        input_binding,
         preparation_ready,
     )
     from sector.desktop.reset_desktop_session import DesktopSession
@@ -243,7 +243,7 @@ def run(args):
     )
     keyboard = None
     if hotkeys:
-        save_vk, restore_vk = virtual_key(args.save_key), virtual_key(args.restore_key)
+        save_vk, restore_vk = input_binding(args.save_key), input_binding(args.restore_key)
         if save_vk == restore_vk or not args.allow_writes:
             raise ValueError("Distinct hotkeys and explicit write opt-in required")
         keyboard = WindowsKeys(args.pid, save_vk, restore_vk)
@@ -520,8 +520,8 @@ def run(args):
                             save_key,
                             restore_key,
                         ) and hotkeys.rebind():
-                            keyboard.save_vk = virtual_key(save_key)
-                            keyboard.restore_vk = virtual_key(restore_key)
+                            keyboard.save_vk = input_binding(save_key)
+                            keyboard.restore_vk = input_binding(restore_key)
                             args.save_key, args.restore_key = save_key, restore_key
                             desktop.publish(save_key=save_key, restore_key=restore_key)
                     focused, save, restore, modifiers = keyboard.read()

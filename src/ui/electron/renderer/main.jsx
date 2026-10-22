@@ -63,9 +63,11 @@ function App() {
   const [error, setError] = useState("");
   const [exportState, setExportState] = useState("");
   const [captureHint, setCaptureHint] = useState(
-    "Press one key. Esc to cancel.",
+    "Press a key, or choose Bind wheel button. Esc to cancel.",
   );
   const [pending, setPending] = useState(false);
+  const [wheelCapturing, setWheelCapturing] = useState(false);
+  const wheelCaptureSequence = useRef(0);
   const [tour, setTour] = useState(false);
   const [onboarding, setOnboarding] = useState(null);
   const tourStartTab = useRef("reset");
@@ -199,10 +201,49 @@ function App() {
     window.addEventListener("keydown", capture, true);
     window.addEventListener("blur", blur);
     return () => {
+      wheelCaptureSequence.current += 1;
+      captureBusy.current = false;
+      setWheelCapturing(false);
+      void api.cancelWheelCapture?.().catch(() => {});
       window.removeEventListener("keydown", capture, true);
       window.removeEventListener("blur", blur);
     };
   }, [modal, settings, keys]);
+
+  async function bindWheel() {
+    if (captureBusy.current) return;
+    const sequence = ++wheelCaptureSequence.current;
+    captureBusy.current = true;
+    setWheelCapturing(true);
+    setCaptureHint(
+      "Release all wheel buttons, then press one button. Keep Sector focused.",
+    );
+    try {
+      const result = await api.captureWheel();
+      if (sequence !== wheelCaptureSequence.current) return;
+      if (!result.ok) {
+        if (!result.canceled) setCaptureHint(result.error);
+        return;
+      }
+      const other = modal === "save_key" ? "restore_key" : "save_key";
+      if (result.binding === settings[other]) {
+        setCaptureHint(
+          "That wheel button is already assigned to the other action.",
+        );
+        return;
+      }
+      if (await updateSettings({ ...settings, [modal]: result.binding }))
+        setModal(null);
+    } catch {
+      if (sequence === wheelCaptureSequence.current)
+        setCaptureHint("Could not capture a wheel button. Try again.");
+    } finally {
+      if (sequence === wheelCaptureSequence.current) {
+        captureBusy.current = false;
+        setWheelCapturing(false);
+      }
+    }
+  }
 
   async function sound(name) {
     try {
@@ -218,7 +259,7 @@ function App() {
   }
 
   function openCapture(name) {
-    setCaptureHint("Press one key. Esc to cancel.");
+    setCaptureHint("Press a key, or choose Bind wheel button. Esc to cancel.");
     setModal(name);
   }
 
@@ -742,12 +783,23 @@ function App() {
                 <>
                   <div className="capture-key" aria-hidden="true">
                     <Glyph icon={keyboard} />
-                    <span>PRESS A KEY</span>
+                    <span>
+                      {wheelCapturing
+                        ? "PRESS A WHEEL BUTTON"
+                        : "KEY OR WHEEL BUTTON"}
+                    </span>
                   </div>
                   <div className="capture-actions">
                     <button
+                      className="primary"
+                      disabled={pending || wheelCapturing}
+                      onClick={bindWheel}
+                    >
+                      {wheelCapturing ? "Listening…" : "Bind wheel button"}
+                    </button>
+                    <button
                       className="text-button"
-                      disabled={pending}
+                      disabled={pending || wheelCapturing}
                       onClick={async () => {
                         if (
                           await updateSettings({

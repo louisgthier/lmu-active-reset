@@ -73,6 +73,37 @@ try {
     }),
     true,
   );
+  await app.evaluate(() =>
+    global.sectorTest.wheelBinding(
+      "WHEEL:0123456789ABCDEF0123456789ABCDEF:128",
+    ),
+  );
+  await app.evaluate(() => global.sectorTest.show());
+  await panel.getByRole("button", { name: /Change save shortcut/ }).click();
+  await page
+    .getByRole("button", { name: "Bind wheel button", exact: true })
+    .click();
+  await panel
+    .getByRole("button", {
+      name: "Change save shortcut, Wheel 0123 · Button 128",
+      exact: true,
+    })
+    .waitFor();
+  await panel.getByRole("button", { name: /Change restore shortcut/ }).click();
+  await page
+    .getByRole("button", { name: "Bind wheel button", exact: true })
+    .click();
+  await page
+    .getByText("That wheel button is already assigned to the other action.", {
+      exact: true,
+    })
+    .waitFor();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await panel.getByRole("button", { name: /Change save shortcut/ }).click();
+  await page.keyboard.press("F6");
+  await panel
+    .getByRole("button", { name: "Change save shortcut, F6", exact: true })
+    .waitFor();
   await page.screenshot({ path: path.join(work, "offline-controls.png") });
   fs.writeFileSync(
     path.join(work, "verification.json"),
@@ -89,7 +120,7 @@ try {
     ),
   );
   console.log(
-    "PASS packaged preview: four safety controls, denied game/reset/Steam actions, sandbox and renderer network restrictions; no listener.",
+    "PASS packaged preview: four safety controls, denied game/reset/Steam actions, sandbox and renderer network restrictions; wheel capture, duplicate rejection and keyboard rebinding; no listener.",
   );
 } finally {
   await app.close();

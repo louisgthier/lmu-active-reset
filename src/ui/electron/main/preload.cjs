@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld("sector", {
   confirmInstallation: (folder) =>
     ipcRenderer.invoke("sector:setup-confirm", folder),
   completeOnboarding: () => ipcRenderer.invoke("sector:setup-complete"),
+  captureWheel: () => ipcRenderer.invoke("sector:wheel-capture"),
+  cancelWheelCapture: () => ipcRenderer.invoke("sector:wheel-cancel"),
   saveSettings: (settings) => ipcRenderer.invoke("sector:settings", settings),
   previewSound: (name) => ipcRenderer.invoke("sector:sound", name),
   minimize: () => ipcRenderer.invoke("sector:minimize"),
