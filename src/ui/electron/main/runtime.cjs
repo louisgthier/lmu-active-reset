@@ -97,6 +97,7 @@ class Runtime extends EventEmitter {
     };
     this.enabled = false;
     this.verifiedUntil = 0;
+    this.contextVerified = true;
     this.child = null;
     this.blockedIdentity = null;
     this.nextDiscovery = 0;
@@ -172,6 +173,7 @@ class Runtime extends EventEmitter {
         pid: this.game.pid,
         identity: this.game.identity,
         expires_at_ms: expiry,
+        writes_allowed: this.contextVerified,
       }),
     );
     try {
@@ -199,6 +201,10 @@ class Runtime extends EventEmitter {
   requestReset(action) {
     const reject = (error) => Promise.resolve({ ok: false, error });
     if (this.eacBlocked) return reject(EAC_MESSAGE);
+    if (!this.contextVerified)
+      return reject(
+        "Writes are paused while offline verification is unavailable.",
+      );
     if (!this.enabled || this.now() >= this.verifiedUntil)
       return reject(
         "Offline authorization expired. Disable Active Reset and restart LMU.",
@@ -298,6 +304,25 @@ class Runtime extends EventEmitter {
                 "LMU process identity or offline authorization changed.",
               );
             const access = await this.admission(games[0]);
+            if (!this.enabled || this.stopping || this.child !== child) return;
+            if (this.now() >= this.verifiedUntil)
+              throw new Error("Safety verification timed out.");
+            if (
+              !access.allowed &&
+              ["transport", "unknown"].includes(access.code)
+            ) {
+              // Do not renew authorization while the HTTP context is unknown.
+              // The worker pauses writes immediately; the existing deadline still applies.
+              this.contextVerified = false;
+              this.writeLease();
+              this.publish({
+                phase: "paused",
+                message: access.reason,
+                context_code: access.code,
+              });
+              this.nextDiscovery = this.now() + 250;
+              return;
+            }
             if (!access.allowed)
               throw new Error(
                 access.reason || "Offline Practice is no longer confirmed.",
@@ -309,6 +334,8 @@ class Runtime extends EventEmitter {
               this.child === child &&
               this.now() < this.verifiedUntil
             ) {
+              this.contextVerified = true;
+              if (this.state.context_code) this.publish({ context_code: null });
               this.verifiedUntil = this.now() + 2500;
               this.writeLease();
             } else if (this.enabled)
@@ -365,6 +392,7 @@ class Runtime extends EventEmitter {
       this.blockedIdentity = game.identity;
       this.beforeLaunch(game);
       this.game = game;
+      this.contextVerified = true;
       this.verifiedUntil = this.now() + 2500;
       this.launch(game.pid);
     } catch (error) {
@@ -432,6 +460,8 @@ class Runtime extends EventEmitter {
       ...emptyCheckpoint,
       message: "LMU detected. Enter driving in offline Practice.",
       clean_shutdown: false,
+      controller_stop_reason: null,
+      context_code: null,
     });
     const child = this.child;
     child.once("error", (error) => {
@@ -450,6 +480,7 @@ class Runtime extends EventEmitter {
       this.verifiedUntil = 0;
       this.onRevoke();
       this.child = null;
+      const controllerCause = this.state.controller_stop_reason;
       const resumable =
         code === 0 &&
         !this.stopping &&
@@ -472,7 +503,7 @@ class Runtime extends EventEmitter {
         message: previousError
           ? (failure ?? this.state.message)
           : resumable
-            ? "Previous host stopped cleanly. Enter Offline Practice and explicitly enable Active Reset; save a new checkpoint."
+            ? `Host stopped cleanly${controllerCause ? ` (${controllerCause})` : ""}. Enter Offline Practice and explicitly enable Active Reset; save a new checkpoint.`
             : code === 0
               ? "Disconnected."
               : `Listener stopped (${code ?? "launch error"}). Reopen Sector after checking the session log.`,

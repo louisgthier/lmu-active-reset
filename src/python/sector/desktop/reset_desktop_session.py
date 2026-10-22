@@ -21,6 +21,7 @@ class DesktopSession:
             "phase": "waiting",
             "checkpoint": False,
             "clean_shutdown": False,
+            "controller_stop_reason": None,
             "saved_speed_kmh": None,
             "saved_at": None,
             "restore_count": 0,
@@ -35,28 +36,54 @@ class DesktopSession:
         if self.directory:
             self.directory.mkdir(parents=True, exist_ok=True)
 
-    def stopped(self):
+    def authorization(self, on_unavailable=lambda: None):
+        """No cached permission: a retry must successfully validate the actual lease."""
+        self.authorization_reason = ""
         if not self.directory:
-            return False
+            return "allowed"
         if (self.directory / "stop").exists():
-            return True
-        try:
-            if self.require_lease:
+            self.authorization_reason = "Desktop requested stop"
+            return "stopped"
+        if not self.require_lease:
+            try:
+                age = self.clock() - (self.directory / "heartbeat").stat().st_mtime
+                if -10 <= age <= 10:
+                    return "allowed"
+            except OSError:
+                pass
+            self.authorization_reason = "Desktop heartbeat unavailable or expired"
+            return "stopped"
+        for attempt in range(2):
+            try:
                 lease = json.loads((self.directory / "heartbeat").read_text(encoding="utf-8"))
                 now = self.clock() * 1000
                 expiry = lease.get("expires_at_ms")
                 identity = lease.get("identity")
-                return not (
-                    lease.get("schema") == 1 and type(lease.get("pid")) is int
+                valid = (lease.get("schema") == 1 and type(lease.get("pid")) is int
                     and lease["pid"] == self.pid and isinstance(identity, str)
                     and identity.startswith(f"{self.pid}:")
                     and type(expiry) in (int, float) and math.isfinite(expiry)
                     and 0 < expiry - now <= 2500
-                )
-            age = self.clock() - (self.directory / "heartbeat").stat().st_mtime
-            return age > 10 or age < -10
-        except (OSError, ValueError, TypeError, AttributeError):
-            return True
+                    and type(lease.get("writes_allowed", True)) is bool)
+                if not valid:
+                    self.authorization_reason = "Desktop authorization invalid or expired"
+                    return "stopped"
+                return "allowed" if lease.get("writes_allowed", True) else "paused"
+            except OSError as error:
+                on_unavailable()
+                # A single replacement race may briefly deny a Windows reader.
+                # No commands are admitted during the retry and no deadline is extended.
+                if attempt == 0 and isinstance(error, (PermissionError, FileNotFoundError)):
+                    time.sleep(0.01)
+                    continue
+                self.authorization_reason = "Desktop authorization file unreadable"
+            except (ValueError, TypeError, AttributeError):
+                self.authorization_reason = "Desktop authorization malformed"
+            break
+        return "stopped"
+
+    def stopped(self):
+        return self.authorization() == "stopped"
 
     def process_matches(self, handle):
         if not self.require_lease:

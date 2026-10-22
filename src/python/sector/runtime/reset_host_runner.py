@@ -250,6 +250,7 @@ def run(args):
         PROJECT / "work/ui-audio", muted=getattr(args, "mute", False) or not hotkeys
     )
     keyboard = None
+    authorization_paused = False
     if hotkeys:
         save_vk, restore_vk = input_binding(args.save_key), input_binding(args.restore_key)
         if save_vk == restore_vk or not args.allow_writes:
@@ -436,9 +437,30 @@ def run(args):
                     physical_trace.drain()
                 if process_exit_code(handle) is not None:
                     break
-                if desktop.stopped():
+                def revoke_input():
+                    ipc.allow = 0
+                    ipc.permit_writes = 0
+                    if hotkeys:
+                        hotkeys.pending = None
+                        hotkeys.armed = False
+
+                authorization = desktop.authorization(on_unavailable=revoke_input)
+                if authorization == "stopped":
+                    desktop.publish(controller_stop_reason=desktop.authorization_reason)
                     outcome = "user_stopped"
                     break
+                if authorization == "paused":
+                    authorization_paused = True
+                    revoke_input()
+                    prepared_at = 0.0
+                    ipc.heartbeat_ms = KERNEL.GetTickCount64()
+                    desktop.finish_request()
+                    desktop.publish(phase="paused", message="Offline verification unavailable. Writes are paused.")
+                    time.sleep(0.05)
+                    continue
+                if authorization_paused:
+                    desktop.publish(message="Offline verification recovered. Checkpoint retained.")
+                    authorization_paused = False
                 if time.monotonic() >= next_module_check:
                     ipc.allow = 0
                     ipc.permit_writes = 0
@@ -458,6 +480,7 @@ def run(args):
                 if desktop.stopped():
                     ipc.allow = 0
                     ipc.permit_writes = 0
+                    desktop.publish(controller_stop_reason=desktop.authorization_reason)
                     outcome = "user_stopped"
                     break
                 before, game, after = observation
@@ -471,7 +494,7 @@ def run(args):
                 decision = assess_player_observation(
                     before, after, game, telemetry, now, started, observation_build=14200
                 )
-                ipc.allow = int(decision["context_decision"] == "allowed")
+                ipc.allow = int(decision["context_decision"] == "allowed" and desktop.authorization(on_unavailable=revoke_input) == "allowed")
                 ipc.heartbeat_ms = now
                 reasons[decision["reason"]] = reasons.get(decision["reason"], 0) + 1
                 if decision["context_decision"] == "forbidden":
@@ -642,6 +665,7 @@ def run(args):
                 process_exit_code=exit_code,
                 failure=failure,
                 stop_reason=outcome,
+                controller_stop_reason=desktop.state.get("controller_stop_reason"),
                 restored=restored,
                 reports=reports,
                 context_reasons=reasons,

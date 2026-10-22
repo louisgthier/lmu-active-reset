@@ -20,10 +20,27 @@ async function resetAccess(game, request = fetch) {
       /^PRACTICE[1-4]$/.test(state.gameSession)
     )
       return { allowed: true };
+    if (
+      !state ||
+      typeof state.settingMode !== "string" ||
+      typeof state.gameSession !== "string"
+    )
+      return {
+        allowed: false,
+        code: "unknown",
+        reason:
+          "LMU session data is incomplete. Writes are paused until verification succeeds.",
+      };
   } catch {
-    // Missing or unknown context never starts a process-writing listener.
+    return {
+      allowed: false,
+      code: "transport",
+      reason:
+        "Cannot verify LMU's offline session: the local API is temporarily unavailable.",
+    };
   }
   return {
+    code: "context",
     allowed: false,
     reason:
       "Active Reset requires Offline Practice. Overlays remain available.",

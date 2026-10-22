@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { discoverGame } = require("./runtime.cjs");
 const { TelemetryModel } = require("../shared/overlay-model.cjs");
+const { CheckpointTiming } = require("../shared/checkpoint-timing.cjs");
 const PAUSE_TIMEOUT = 300;
 const SCORING_TIMEOUT = 1500;
 const displayRate = (value) =>
@@ -21,6 +22,7 @@ class OverlayTelemetry extends EventEmitter {
     super();
     Object.assign(this, { root, discover, spawnChild, now, getRefreshRate });
     this.model = new TelemetryModel();
+    this.checkpointTiming = new CheckpointTiming({ now });
     this.frame = null;
     this.status = "Waiting for LMU";
     this.stopped = true;
@@ -35,6 +37,7 @@ class OverlayTelemetry extends EventEmitter {
     this.emit("frame", frame);
   }
   onResetStatus(state) {
+    this.checkpointTiming.onStatus(state);
     const wasPending = this.restorePending;
     const pending =
       state.phase === "active" && [2, 3].includes(state.reset_action);
@@ -159,6 +162,7 @@ class OverlayTelemetry extends EventEmitter {
             // The SDK pause heartbeat takes priority even during a reset handoff.
             if (raw.paused === true) {
               this.restoreUntil = 0;
+              this.checkpointTiming.hold();
               this.publish(null, "Paused");
               continue;
             }
@@ -174,7 +178,10 @@ class OverlayTelemetry extends EventEmitter {
               continue;
             }
             this.publish(
-              this.model.update(raw),
+              {
+                ...this.model.update(raw),
+                checkpointTiming: this.checkpointTiming.update(raw),
+              },
               raw.cars.length ? "Live" : "Waiting for session",
             );
           } catch {
@@ -187,6 +194,7 @@ class OverlayTelemetry extends EventEmitter {
           this.child = null;
           this.lastET = null;
           this.lastETScoring = null;
+          this.checkpointTiming.reset();
           this.publish(null, "Waiting for telemetry");
         }
       };
@@ -204,6 +212,7 @@ class OverlayTelemetry extends EventEmitter {
     this.timer = null;
     this.restoreUntil = 0;
     this.restorePending = false;
+    this.checkpointTiming.reset();
     this.child?.stdin.end("stop\n");
     this.publish(null, "Disabled");
   }

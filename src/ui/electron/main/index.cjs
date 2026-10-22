@@ -624,6 +624,8 @@ if (!app.requestSingleInstanceLock()) {
           checkpoint: state.checkpoint,
           log_prefix: state.log_prefix,
           restore_count: state.restore_count,
+          controller_stop_reason: state.controller_stop_reason,
+          context_code: state.context_code,
         });
         overlays.telemetry.onResetStatus(state);
         if (!window.isDestroyed())

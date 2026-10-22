@@ -126,6 +126,63 @@ try {
     false,
   );
   await page.screenshot({ path: path.join(work, "offline-controls.png") });
+  await page.getByRole("tab", { name: "Overlay", exact: true }).click();
+  await page.getByRole("button", { name: "Delta", exact: true }).click();
+  await app.evaluate(() =>
+    global.sectorTest.overlays().telemetry.publish(
+      {
+        connected: true,
+        driving: true,
+        foreground: true,
+        session: 1,
+        track: "Fixture",
+        et: 20,
+        length: 1000,
+        player: { id: 1, et: 20, speed: 100 },
+        cars: [{ id: 1, player: true, best: 80 }],
+        checkpointTiming: {
+          active: true,
+          valid: true,
+          seconds: 12.345,
+          delta: -0.25,
+          reference: true,
+        },
+      },
+      "Live",
+    ),
+  );
+  await page.getByText("CHECKPOINT", { exact: true }).waitFor();
+  await page.getByText("time 0:12.345", { exact: true }).waitFor();
+  await page.getByText("vs checkpoint best", { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(work, "checkpoint-timing.png") });
+  await app.evaluate(() => {
+    const telemetry = global.sectorTest.overlays().telemetry;
+    telemetry.publish(
+      {
+        ...telemetry.frame,
+        checkpointTiming: {
+          ...telemetry.frame.checkpointTiming,
+          finished: true,
+          record: true,
+          remainingDistance: 0,
+        },
+      },
+      "Live",
+    );
+  });
+  await page.getByText("FINISHED - NEW BEST", { exact: true }).waitFor();
+  await page
+    .getByText("Result frozen - reset when ready", { exact: true })
+    .waitFor();
+  const finishColor = await page
+    .getByText("FINISHED - NEW BEST", { exact: true })
+    .evaluate((node) => getComputedStyle(node).color);
+  assert.equal(finishColor, "rgb(192, 132, 252)");
+  await page.screenshot({ path: path.join(work, "checkpoint-finished.png") });
+  assert.equal(
+    await app.evaluate(() => global.sectorTest.hasListener()),
+    false,
+  );
   fs.writeFileSync(
     path.join(work, "verification.json"),
     JSON.stringify(
@@ -141,7 +198,7 @@ try {
     ),
   );
   console.log(
-    "PASS packaged preview: four safety controls, denied game/reset/Steam actions, sandbox and renderer network restrictions; wheel capture, duplicate rejection and keyboard rebinding; no listener.",
+    "PASS packaged preview: four safety controls, denied game/reset/Steam actions, sandbox and renderer network restrictions; wheel bindings, explicit reactivation and checkpoint finish display; no listener.",
   );
 } finally {
   await app.close();

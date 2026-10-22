@@ -425,12 +425,62 @@ function valuesFor(id, data, settings) {
     return { ...common, rows };
   }
   if (id === "delta") {
-    const delta = finite(p?.delta) && best ? p.delta : null;
+    const checkpoint =
+      live && data.checkpointTiming?.active ? data.checkpointTiming : null;
+    const delta = checkpoint
+      ? checkpoint.valid
+        ? checkpoint.delta
+        : null
+      : finite(p?.delta) && best
+        ? p.delta
+        : null;
+    const practiceClock =
+      checkpoint?.valid && finite(checkpoint.seconds)
+        ? `${Math.floor(checkpoint.seconds / 60)}:${(checkpoint.seconds % 60).toFixed(3).padStart(6, "0")}`
+        : dash;
     return {
       ...common,
+      timingTitle: checkpoint?.finished
+        ? checkpoint.record
+          ? "FINISHED - NEW BEST"
+          : "FINISHED"
+        : checkpoint
+          ? "CHECKPOINT"
+          : "DELTA",
+      timingFg: checkpoint?.finished
+        ? checkpoint.record
+          ? "#C084FC"
+          : "#FFAB57"
+        : "#F2F4F6",
+      attemptStatus: !checkpoint
+        ? ""
+        : checkpoint.finished
+          ? "Result frozen - reset when ready"
+          : checkpoint.finishDistance === null
+            ? "First reset sets the finish"
+            : Number.isFinite(checkpoint.remainingDistance)
+              ? `${Math.ceil(checkpoint.remainingDistance)} m to finish`
+              : "Waiting for telemetry",
+      referenceLabel: checkpoint
+        ? checkpoint.reference
+          ? "vs checkpoint best"
+          : "Recording reference"
+        : `vs PB ${time(best)}`,
+      clockLabel: checkpoint ? "time" : "pred.",
       deltaTxt: signed(delta),
-      deltaFg: delta < 0 ? "#3DDC84" : "#FF5D5D",
-      pred: delta !== null ? time(best + delta) : dash,
+      deltaFg:
+        checkpoint?.finished && checkpoint.record
+          ? "#C084FC"
+          : delta === null
+            ? "#F2F4F6"
+            : delta < 0
+              ? "#3DDC84"
+              : "#FF5D5D",
+      pred: checkpoint
+        ? practiceClock
+        : delta !== null
+          ? time(best + delta)
+          : dash,
       fastScale: delta < 0 ? clamp(-delta) : 0,
       slowScale: delta > 0 ? clamp(delta) : 0,
     };

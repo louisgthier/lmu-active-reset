@@ -431,3 +431,54 @@ test("a rejected fresh admission after reactivation cannot launch another worker
   await f.runtime.tick();
   assert.equal(f.workers.length, 1);
 });
+
+test("temporary context transport failure pauses writes without renewing the lease", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  const deadline = f.runtime.verifiedUntil;
+  f.runtime.admission = async () => ({
+    allowed: false,
+    code: "transport",
+    reason: "fixture API timeout",
+  });
+  f.setClock(2600);
+  await f.runtime.tick();
+  await f.runtime.protectionCheck;
+  const lease = JSON.parse(
+    fs.readFileSync(path.join(f.runtime.session, "heartbeat")),
+  );
+  assert.equal(lease.writes_allowed, false);
+  assert.equal(lease.expires_at_ms, deadline);
+  assert.equal(f.runtime.enabled, true);
+  assert.equal((await f.runtime.requestReset("save")).ok, false);
+  f.runtime.admission = async () => ({ allowed: true });
+  f.setClock(2900);
+  await f.runtime.tick();
+  await f.runtime.protectionCheck;
+  assert.equal(f.runtime.contextVerified, true);
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(f.runtime.session, "heartbeat")))
+      .writes_allowed,
+    true,
+  );
+});
+
+test("prolonged unknown context still expires and cannot automatically revive authorization", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  f.runtime.admission = async () => ({
+    allowed: false,
+    code: "unknown",
+    reason: "incomplete",
+  });
+  f.setClock(2600);
+  await f.runtime.tick();
+  await f.runtime.protectionCheck;
+  f.setClock(3600);
+  await f.runtime.tick();
+  assert.equal(f.runtime.enabled, false);
+  assert.ok(fs.existsSync(path.join(f.runtime.session, "stop")));
+  assert.equal(f.safety.state().restartRequired, true);
+});

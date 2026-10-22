@@ -168,3 +168,41 @@ test("monitor scoring remains visible and late data cannot revive a stopped read
   child.stdout.write(JSON.stringify(frame(12)) + "\n");
   assert.equal(f.feed.frame, null);
 });
+
+test("checkpoint timing survives overlay history reset and follows acknowledged restore events", async (t) => {
+  const f = await fixture(t);
+  const at = (et, distance) =>
+    frame(et, {
+      cars: [{ id: 1, player: true, class: "LMGT3", distance, laps: 0 }],
+    });
+  f.send(at(10, 100));
+  f.feed.onResetStatus({
+    phase: "active",
+    checkpoint: true,
+    last_event: "save",
+    report_id: 1,
+    log_prefix: "fixture",
+    restore_count: 0,
+    reset_action: 0,
+  });
+  f.send(at(10.1, 100));
+  f.send(at(11.1, 120));
+  f.send(at(12.1, 140));
+  assert.ok(Math.abs(f.feed.frame.checkpointTiming.seconds - 2) < 1e-8);
+  f.feed.onResetStatus({
+    phase: "active",
+    checkpoint: true,
+    last_event: "restore",
+    report_id: 3,
+    log_prefix: "fixture",
+    restore_count: 1,
+    reset_action: 0,
+  });
+  f.send(at(12.2, 100));
+  assert.equal(f.feed.frame.checkpointTiming.seconds, 0);
+  f.send(at(13.2, 130));
+  assert.ok(Math.abs(f.feed.frame.checkpointTiming.delta + 0.5) < 1e-8);
+  f.feed.onResetStatus({ checkpoint: false, phase: "stopped" });
+  f.send(at(13.3, 132));
+  assert.equal(f.feed.frame.checkpointTiming, null);
+});
