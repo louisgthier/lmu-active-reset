@@ -56,7 +56,7 @@ test("launches the selected executable once without a shell and awaits discovery
       detached: true,
       stdio: "ignore",
       shell: false,
-      windowsHide: true,
+      windowsHide: false,
     },
   ]);
   assert.equal(launcher.state.launching, false);

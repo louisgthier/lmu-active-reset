@@ -58,7 +58,7 @@ class GameLauncher extends EventEmitter {
           detached: true,
           stdio: "ignore",
           shell: false,
-          windowsHide: true,
+          windowsHide: false,
         },
       );
       await new Promise((resolve, reject) => {
