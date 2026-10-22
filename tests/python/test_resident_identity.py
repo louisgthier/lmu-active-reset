@@ -72,6 +72,16 @@ class ResidentIdentityTests(unittest.TestCase):
         self.assertFalse(self.project.exists())
         self.assertEqual(self.resolve(entry), self.profile)
 
+    def test_offline_prerelease_resident_still_requires_its_content_address(self):
+        entry = self.install(managed=True)
+        root = Path(entry["path"]).parents[1]
+        renamed = root.rename(root.with_name(root.name.replace("0.2.2-", "1.0.1-offline.8-")))
+        entry["path"] = str(renamed / "bin" / self.name)
+        self.assertEqual(self.resolve(entry), self.profile)
+        (renamed / "release-manifest.json").write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "manifest changed"):
+            self.resolve(entry)
+
     def test_changed_dll_is_not_accepted(self):
         entry = self.install(managed=True)
         Path(entry["path"]).write_bytes(b"changed")

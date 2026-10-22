@@ -1,12 +1,15 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { CleanHandoff } = require("./clean-handoff.cjs");
 
 // This is a cooperative guard, not an anti-cheat bypass. A process which may
 // contain our host is never declared clean until its identity has disappeared.
 class OfflineSafety {
-  constructor({ file, installation }) {
+  constructor({ file, installation, now = Date.now }) {
     this.file = file;
     this.installation = installation;
+    this.handoff = new CleanHandoff(`${file}.handoff.json`, now);
+    this.pendingHandoff = null;
     this.enabled = false;
     this.ownedPid = null;
     this.identity = null;
@@ -62,12 +65,14 @@ class OfflineSafety {
           g.identity !== this.marker.identity,
       )
     ) {
+      this.handoff.clear();
       fs.rmSync(this.file, { force: true });
       this.marker = null;
       this.launchIdentity = null;
       this.launchPid = null;
       this.revoke();
     }
+    if (games.some((game) => game.eac === true)) this.handoff.clear();
     if (this.enabled && !this.allows(games[0], games.length)) this.revoke();
   }
   eligible(game, count = 1) {
@@ -117,6 +122,58 @@ class OfflineSafety {
       !this.error,
     );
   }
+  resumeEligible(game, count = 1) {
+    return Boolean(
+      !this.enabled &&
+      !this.error &&
+      count === 1 &&
+      game?.eac === false &&
+      game.identity === this.marker?.identity &&
+      game.pid === this.marker?.pid &&
+      typeof game.executable === "string" &&
+      path.resolve(game.executable).toLowerCase() ===
+        path
+          .resolve(this.installation(), "Le Mans Ultimate.exe")
+          .toLowerCase() &&
+      this.handoff.read(this.marker, this.installation()),
+    );
+  }
+  claimHandoff(game, count) {
+    if (!this.resumeEligible(game, count))
+      throw new Error(
+        "A recent clean Sector shutdown is required. Restart LMU.",
+      );
+    this.pendingHandoff = this.handoff.claim(this.marker, this.installation());
+    return this.pendingHandoff;
+  }
+  adoptHandoff(game, ticket) {
+    if (
+      ticket !== this.pendingHandoff ||
+      !ticket ||
+      ticket.identity !== game.identity ||
+      ticket.pid !== game.pid ||
+      game.eac !== false ||
+      ticket.executable.toLowerCase() !== game.executable.toLowerCase() ||
+      ticket.identity !== this.marker?.identity ||
+      this.handoff.now() < ticket.created ||
+      this.handoff.now() - ticket.created >= 600000
+    )
+      throw new Error("Clean handoff verification changed. Restart LMU.");
+    this.pendingHandoff = null;
+    this.launchPid = game.pid;
+    this.launchIdentity = game.identity;
+    this.rearmIdentity = game.identity;
+  }
+  writeHandoff(stop, controller) {
+    if (this.error || stop?.game?.identity !== this.launchIdentity)
+      return false;
+    return this.handoff.write(
+      stop,
+      controller,
+      this.marker,
+      this.installation(),
+    );
+  }
   enable(game, count) {
     const resuming = this.rearmEligible(game, count);
     if (!resuming && (this.marker || !this.eligible(game, count)))
@@ -163,6 +220,7 @@ class OfflineSafety {
     this.marker = marker; // Persist BEFORE starting a worker which could inject.
   }
   revoke() {
+    this.pendingHandoff = null;
     this.rearmIdentity = null;
     this.resumeAuthorized = false;
     this.enabled = false;
@@ -176,7 +234,9 @@ class OfflineSafety {
       restartRequired: Boolean(this.marker),
       canEnable:
         (!this.marker && this.eligible(games[0], games.length)) ||
-        this.rearmEligible(games[0], games.length),
+        this.rearmEligible(games[0], games.length) ||
+        this.resumeEligible(games[0], games.length),
+      canResume: this.resumeEligible(games[0], games.length),
       canRearm: this.rearmEligible(games[0], games.length),
       error: this.error,
     };

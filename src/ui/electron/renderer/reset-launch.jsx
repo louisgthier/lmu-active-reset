@@ -44,7 +44,11 @@ export function ResetLaunch({ game, preview, disabled }) {
         disabled={blocked || safety.enabled || !safety.canEnable}
         onClick={() => action("enableReset")}
       >
-        {safety.canRearm ? "Reactivate Active Reset" : "Enable Active Reset"}
+        {safety.canResume
+          ? "Resume previous offline session"
+          : safety.canRearm
+            ? "Reactivate Active Reset"
+            : "Enable Active Reset"}
       </button>
       <button
         className="reset-launch-button"
@@ -61,13 +65,15 @@ export function ResetLaunch({ game, preview, disabled }) {
         Restart LMU through Steam
       </button>
       <p role="status">
-        {safety.canRearm
-          ? "Previous host stopped cleanly. Enter Offline Practice, enable Active Reset again and save a new checkpoint. Close LMU before online play."
-          : safety.restartRequired
-            ? "This LMU process may contain the reset host. Close it before online play. Saved game data is not rolled back."
-            : safety.enabled
-              ? "Active Reset enabled for this offline session only."
-              : "Active Reset is disabled. Start a fresh offline session here, enter Offline Practice, then enable it explicitly."}
+        {safety.canResume
+          ? "A recent clean Sector shutdown was recorded. Resume explicitly to verify the previous controller exited and audit the resident host. A new checkpoint is required."
+          : safety.canRearm
+            ? "Previous host stopped cleanly. Enter Offline Practice, enable Active Reset again and save a new checkpoint. Close LMU before online play."
+            : safety.restartRequired
+              ? "This LMU process may contain the reset host. Close it before online play. Saved game data is not rolled back."
+              : safety.enabled
+                ? "Active Reset enabled for this offline session only."
+                : "Active Reset is disabled. Start a fresh offline session here, enter Offline Practice, then enable it explicitly."}
       </p>
       {(error || game.error || safety.error) && (
         <p role="alert">{error || game.error || safety.error}</p>

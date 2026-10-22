@@ -108,6 +108,10 @@ class Runtime extends EventEmitter {
   }
 
   publish(patch) {
+    if (patch.phase === "error" || patch.blocked_reason === "eac") {
+      this.handoffBlocked = true;
+      this.lastCleanStop = null;
+    }
     if (patch.blocked_reason === "eac") this.eacBlocked = true;
     this.state = { ...this.state, ...patch };
     if (!this.enabled && patch.phase === "active")
@@ -412,6 +416,8 @@ class Runtime extends EventEmitter {
   }
 
   launch(pid) {
+    this.lastCleanStop = null;
+    this.handoffBlocked = false;
     this.session = path.join(this.root, "work/gui", randomUUID());
     this.publishedLeaseUntil = 0;
     fs.mkdirSync(this.session, { recursive: true });
@@ -481,6 +487,16 @@ class Runtime extends EventEmitter {
       this.onRevoke();
       this.child = null;
       const controllerCause = this.state.controller_stop_reason;
+      const clean =
+        !this.handoffBlocked &&
+        code === 0 &&
+        !this.eacBlocked &&
+        failure === null &&
+        this.state.phase !== "error" &&
+        this.state.clean_shutdown === true;
+      this.lastCleanStop = clean
+        ? { clean: true, game: { ...this.game }, workerPid: child.pid }
+        : null;
       const resumable =
         code === 0 &&
         !this.stopping &&

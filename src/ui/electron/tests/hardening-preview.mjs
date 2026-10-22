@@ -121,6 +121,29 @@ try {
     .getByRole("button", { name: "Reactivate Active Reset", exact: true })
     .waitFor();
   await panel.getByText(/Previous host stopped cleanly/).waitFor();
+  await app.evaluate(() =>
+    global.sectorTest.window().webContents.send("sector:game", {
+      running: true,
+      launching: false,
+      eac: false,
+      safety: {
+        enabled: false,
+        canEnable: true,
+        canResume: true,
+        restartRequired: true,
+      },
+    }),
+  );
+  await panel
+    .getByRole("button", {
+      name: "Resume previous offline session",
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(
+    (await page.evaluate(() => window.sector.enableReset())).ok,
+    false,
+  );
   assert.equal(
     await app.evaluate(() => global.sectorTest.hasListener()),
     false,

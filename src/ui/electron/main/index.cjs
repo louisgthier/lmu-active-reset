@@ -195,6 +195,13 @@ async function quit() {
     overlays?.stop();
     gameLauncher.stop();
     await runtime.stop();
+    if (!preview && !runtime.eacBlocked && runtime.lastCleanStop) {
+      try {
+        safety.writeHandoff(runtime.lastCleanStop, process.pid);
+      } catch (error) {
+        diagnostics.record("handoff-unavailable", { message: error.message });
+      }
+    }
     canQuit = true;
     app.quit();
   } catch (error) {
@@ -308,14 +315,42 @@ function installBridge() {
         throw new Error(
           "Exactly one verified offline LMU session is required.",
         );
+      const ticket = safety.resumeEligible(games[0], games.length)
+        ? safety.claimHandoff(games[0], games.length)
+        : null;
       const access = await resetAccess(games[0]);
       if (!access.allowed) throw new Error(access.reason);
+      if (ticket) {
+        const { stdout } = await promisify(execFile)(
+          resolvePython(),
+          [
+            "-B",
+            "-X",
+            "utf8",
+            path.join(root, "scripts/sector.py"),
+            "runtime.audit_session_resume",
+            "--pid",
+            String(ticket.pid),
+            "--identity",
+            ticket.identity,
+            "--controller",
+            String(ticket.controller),
+            "--worker",
+            String(ticket.worker),
+          ],
+          { cwd: root, windowsHide: true, timeout: 15000, maxBuffer: 8192 },
+        );
+        const proof = JSON.parse(stdout);
+        if (proof.verified !== true || proof.identity !== games[0].identity)
+          throw new Error("Resident handoff audit failed. Restart LMU.");
+      }
       // Refresh after asynchronous context checks to reject a changed process.
       const refreshed = await discoverInstallation();
       if (refreshed.length !== 1 || refreshed[0].identity !== games[0].identity)
         throw new Error("LMU identity changed during activation.");
       if (quitting || transitionPending)
         throw new Error("Activation canceled.");
+      if (ticket) safety.adoptHandoff(refreshed[0], ticket);
       safety.enable(refreshed[0], refreshed.length);
       runtime.enable();
       gameLauncher.publish({});

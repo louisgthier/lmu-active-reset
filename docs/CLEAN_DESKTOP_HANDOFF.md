@@ -1,0 +1,9 @@
+# Clean desktop restart handoff
+
+A normal Quit Sector may publish a single-use provenance receipt only after its worker exits with a fully verified native clean shutdown. Fatal or EAC state cannot issue a receipt. The modified-process journal remains set. The receipt expires ten minutes after quit and binds the selected executable, exact LMU PID/creation identity, predecessor desktop PID and predecessor worker PID.
+
+On the next start, Active Reset remains disabled. **Resume previous offline session** is an explicit request for fresh authorization, not reuse of an old lease. Claiming the receipt consumes it atomically before verification; failed or interrupted verification requires restarting LMU. The read-only audit refuses live or inaccessible predecessor processes, changed game identity, EAC modules, unknown resident modules, unverified DLL/profile hashes and hooks that are not restored. Offline Practice is checked again and the new worker repeats admission/auditing before loading a fresh one-session host. The old checkpoint and timing reference are discarded.
+
+A reused predecessor PID causes a conservative refusal. A corrupt, missing, expired or future-dated receipt cannot offer resume. Process exit clears the receipt. The receipt is local user-account state, not a cryptographic defense against an attacker with control of that Windows account. Independent native and process checks remain necessary. A content-addressed older offline release may supply a resident module only if its own immutable inventory, profile, DLL hash, stopped IPC and original hook bytes verify.
+
+This cannot retroactively resume a quit performed by versions before 1.0.1-offline.9. Start a fresh game through the new version once, then use its normal Quit Sector. DLLs remain resident, so restarting LMU before online play is still required. Fixture and isolated preview checks do not establish live-game behavior or a guarantee against bans.

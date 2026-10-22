@@ -36,7 +36,7 @@ def resident_profile(entry, manifest, project, runtime_store=None):
     runtime_store = Path(runtime_store).resolve()
     if resident.parent != project / "bin":
         # Only a content-addressed Sector installation may supply an older profile.
-        release = re.fullmatch(r"\d+\.\d+\.\d+-([0-9a-f]{16})", root.name)
+        release = re.fullmatch(r"\d+\.\d+\.\d+(?:-offline\.\d+)?-([0-9a-f]{16})", root.name)
         if resident.parent.name != "bin" or root.parent != runtime_store or not release:
             raise ValueError(f"Unrecognized resident location: {resident}. Restart LMU.")
         inventory_bytes = (root / "release-manifest.json").read_bytes()

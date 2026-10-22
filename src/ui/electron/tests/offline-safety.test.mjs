@@ -482,3 +482,15 @@ test("prolonged unknown context still expires and cannot automatically revive au
   assert.ok(fs.existsSync(path.join(f.runtime.session, "stop")));
   assert.equal(f.safety.state().restartRequired, true);
 });
+
+test("a fatal error remains ineligible for handoff even if quit replaces the displayed phase", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  f.workers[0].pid = 77;
+  f.runtime.publish({ phase: "error", message: "unverified failure" });
+  f.runtime.publish({ phase: "stopping", clean_shutdown: true });
+  f.runtime.stopping = true;
+  f.workers[0].emit("close", 0);
+  assert.equal(f.runtime.lastCleanStop, null);
+});
