@@ -232,3 +232,118 @@ test("runtime integrity rejects changed scripts and malformed inventory paths", 
   manifest({ "../outside.py": hash("trusted") });
   assert.throws(() => verifyRuntime(payload, resources), /Invalid/);
 });
+
+test("a transient Windows lease replacement conflict preserves the old lease and retries", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  const file = path.join(f.runtime.session, "heartbeat");
+  const previous = fs.readFileSync(file, "utf8");
+  const deadline = f.runtime.publishedLeaseUntil;
+  f.runtime.verifiedUntil = deadline + 1000;
+  const replace = f.runtime.replaceLease;
+  f.runtime.replaceLease = () => {
+    throw Object.assign(new Error("sharing violation"), { code: "EPERM" });
+  };
+  f.runtime.writeLease();
+  assert.equal(fs.readFileSync(file, "utf8"), previous);
+  assert.equal(f.runtime.publishedLeaseUntil, deadline);
+  assert.equal(f.runtime.enabled, true);
+  f.runtime.replaceLease = replace;
+  f.runtime.writeLease();
+  assert.equal(
+    JSON.parse(fs.readFileSync(file)).expires_at_ms,
+    deadline + 1000,
+  );
+});
+
+test("repeated publication conflicts cannot revive the old lease after expiry", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  const published = f.runtime.publishedLeaseUntil;
+  f.runtime.replaceLease = () => {
+    throw Object.assign(new Error("locked"), { code: "EACCES" });
+  };
+  f.runtime.verifiedUntil = published + 2000;
+  f.setClock(published - 1);
+  f.runtime.writeLease();
+  f.setClock(published);
+  await f.runtime.tick();
+  assert.equal(f.runtime.enabled, false);
+  assert.equal(f.runtime.state.phase, "error");
+  assert.match(
+    f.runtime.state.message,
+    /Published safety authorization expired/,
+  );
+  assert.equal((await f.runtime.requestReset("save")).ok, false);
+  assert.equal(f.safety.state().restartRequired, true);
+  assert.ok(fs.existsSync(path.join(f.runtime.session, "stop")));
+});
+
+test("failed initial publication never starts a listener", async (t) => {
+  const f = runtimeFixture(t, {
+    replaceLease: () => {
+      throw Object.assign(new Error("locked"), { code: "EPERM" });
+    },
+  });
+  f.activate();
+  await f.runtime.tick();
+  assert.equal(f.workers.length, 0);
+  assert.equal(f.runtime.enabled, false);
+  assert.equal(f.runtime.state.phase, "error");
+});
+
+test("unexpected lease I/O errors still revoke immediately", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  f.runtime.replaceLease = () => {
+    throw Object.assign(new Error("disk failure"), { code: "EIO" });
+  };
+  await f.runtime.tick();
+  assert.equal(f.runtime.enabled, false);
+  assert.match(f.runtime.state.message, /disk failure/);
+});
+
+test("a locked lease cannot prevent the stop signal or restore authorization", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  const remove = fs.rmSync;
+  const file = path.join(f.runtime.session, "heartbeat");
+  const mock = t.mock.method(fs, "rmSync", (target, options) => {
+    if (target === file)
+      throw Object.assign(new Error("locked"), { code: "EPERM" });
+    return remove(target, options);
+  });
+  f.runtime.disable();
+  assert.equal(f.runtime.enabled, false);
+  assert.equal(f.safety.enabled, false);
+  assert.ok(fs.existsSync(path.join(f.runtime.session, "stop")));
+  assert.equal((await f.runtime.requestReset("save")).ok, false);
+  mock.mock.restore();
+});
+
+test("worker shutdown status cannot overwrite the cause of a fatal disconnect", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  f.runtime.disable("publication failed");
+  f.runtime.publish({ phase: "error", message: "publication failed" });
+  fs.writeFileSync(
+    path.join(f.runtime.session, "status.json"),
+    JSON.stringify({
+      schema_version: 1,
+      sequence: 99,
+      phase: "stopped",
+      message: "Disconnected.",
+      checkpoint: false,
+    }),
+  );
+  f.runtime.readStatus();
+  assert.equal(f.runtime.state.message, "publication failed");
+  f.workers[0].emit("close", 0);
+  assert.equal(f.runtime.state.phase, "error");
+  assert.equal(f.runtime.state.message, "publication failed");
+});

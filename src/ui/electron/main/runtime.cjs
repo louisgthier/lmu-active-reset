@@ -65,6 +65,7 @@ class Runtime extends EventEmitter {
     discover = discoverGame,
     spawnChild = spawn,
     now = Date.now,
+    replaceLease = fs.renameSync,
     admission = resetAccess,
     authorize = () => false,
     beforeLaunch = () => {
@@ -81,6 +82,7 @@ class Runtime extends EventEmitter {
       discover,
       spawnChild,
       now,
+      replaceLease,
       admission,
       authorize,
       beforeLaunch,
@@ -96,7 +98,7 @@ class Runtime extends EventEmitter {
     this.child = null;
     this.blockedIdentity = null;
     this.nextDiscovery = 0;
-    this.nextHeartbeat = 0;
+    this.publishedLeaseUntil = 0;
     this.sequence = -1;
     this.stopping = false;
     this.busy = false;
@@ -136,8 +138,18 @@ class Runtime extends EventEmitter {
     this.onRevoke();
     this.finishReset({ ok: false, error: reason });
     if (this.session) {
-      fs.rmSync(path.join(this.session, "heartbeat"), { force: true });
-      fs.writeFileSync(path.join(this.session, "stop"), "");
+      // Signal stop even if a concurrent Windows reader prevents deleting the lease.
+      try {
+        fs.writeFileSync(path.join(this.session, "stop"), "");
+      } catch {
+        reason +=
+          " Stop signal could not be written; the existing lease will expire.";
+      }
+      try {
+        fs.rmSync(path.join(this.session, "heartbeat"), { force: true });
+      } catch {
+        reason += " The previous lease could not be removed and will expire.";
+      }
     }
     this.publish({ phase: "stopped", ...emptyCheckpoint, message: reason });
   }
@@ -145,17 +157,35 @@ class Runtime extends EventEmitter {
   writeLease() {
     if (!this.enabled || this.stopping || this.now() >= this.verifiedUntil)
       return;
+    if (this.publishedLeaseUntil && this.now() >= this.publishedLeaseUntil)
+      throw new Error(
+        "Published safety authorization expired. Restart LMU before re-enabling.",
+      );
     const file = path.join(this.session, "heartbeat");
+    const expiry = this.verifiedUntil;
     fs.writeFileSync(
       `${file}.tmp`,
       JSON.stringify({
         schema: 1,
         pid: this.game.pid,
         identity: this.game.identity,
-        expires_at_ms: this.verifiedUntil,
+        expires_at_ms: expiry,
       }),
     );
-    fs.renameSync(`${file}.tmp`, file);
+    try {
+      this.replaceLease(`${file}.tmp`, file);
+      this.publishedLeaseUntil = expiry;
+    } catch (error) {
+      // Python can briefly hold the destination open without delete sharing on Windows.
+      // Keep the previous complete lease and retry on the next tick; never extend
+      // its lifetime or recreate an expired authorization after a missed publication.
+      if (
+        !["EPERM", "EACCES", "EBUSY"].includes(error.code) ||
+        !this.publishedLeaseUntil ||
+        this.now() >= this.publishedLeaseUntil
+      )
+        throw error;
+    }
   }
 
   start() {
@@ -353,6 +383,7 @@ class Runtime extends EventEmitter {
 
   launch(pid) {
     this.session = path.join(this.root, "work/gui", randomUUID());
+    this.publishedLeaseUntil = 0;
     fs.mkdirSync(this.session, { recursive: true });
     this.writeLease();
     const logs = path.join(this.root, "logs");
@@ -409,18 +440,19 @@ class Runtime extends EventEmitter {
     });
     child.once("close", (code) => {
       if (this.child !== child) return;
+      const failure = this.state.phase === "error" ? this.state.message : null;
       this.readStatus();
       this.finishReset({ ok: false, error: "Reset listener disconnected." });
       this.enabled = false;
       this.verifiedUntil = 0;
       this.onRevoke();
       this.child = null;
-      const previousError = this.state.phase === "error";
+      const previousError = failure !== null || this.state.phase === "error";
       this.publish({
         ...emptyCheckpoint,
         phase: previousError ? "error" : code === 0 ? "stopped" : "error",
         message: previousError
-          ? this.state.message
+          ? (failure ?? this.state.message)
           : code === 0
             ? "Disconnected."
             : `Listener stopped (${code ?? "launch error"}). Reopen Sector after checking the session log.`,
@@ -441,7 +473,11 @@ class Runtime extends EventEmitter {
       )
         return;
       this.sequence = value.sequence;
-      this.publish(value);
+      const failure =
+        !this.enabled && this.state.phase === "error"
+          ? { phase: "error", message: this.state.message }
+          : {};
+      this.publish({ ...value, ...failure });
       if (
         value.desktop_request?.id === this.resetRequest?.id &&
         this.resetRequest
@@ -462,7 +498,7 @@ class Runtime extends EventEmitter {
     }
     this.publish({
       phase: "stopping",
-      message: "Finishing the current operation…",
+      message: "Finishing the current operation\u2026",
     });
     // Keep heartbeat/status polling alive until Python confirms native detach.
     // Never terminate the game or a listener in the middle of a restore.
