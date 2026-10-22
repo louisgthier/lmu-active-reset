@@ -10,9 +10,11 @@ import time
 
 
 class DesktopSession:
-    def __init__(self, directory, clock=time.time, settings_file=None):
+    def __init__(self, directory, clock=time.time, settings_file=None, require_lease=False, pid=None):
         self.directory = Path(directory) if directory else None
         self.clock = clock
+        self.require_lease = require_lease
+        self.pid = pid
         self.settings_file = Path(settings_file) if settings_file else None
         self.state = {
             "schema_version": 1,
@@ -38,10 +40,43 @@ class DesktopSession:
         if (self.directory / "stop").exists():
             return True
         try:
+            if self.require_lease:
+                lease = json.loads((self.directory / "heartbeat").read_text(encoding="utf-8"))
+                now = self.clock() * 1000
+                expiry = lease.get("expires_at_ms")
+                identity = lease.get("identity")
+                return not (
+                    lease.get("schema") == 1 and type(lease.get("pid")) is int
+                    and lease["pid"] == self.pid and isinstance(identity, str)
+                    and identity.startswith(f"{self.pid}:")
+                    and type(expiry) in (int, float) and math.isfinite(expiry)
+                    and 0 < expiry - now <= 2500
+                )
             age = self.clock() - (self.directory / "heartbeat").stat().st_mtime
             return age > 10 or age < -10
-        except FileNotFoundError:
+        except (OSError, ValueError, TypeError, AttributeError):
             return True
+
+    def process_matches(self, handle):
+        if not self.require_lease:
+            return True
+        if self.stopped():
+            return False
+        try:
+            import ctypes as C
+            from ctypes import wintypes as W
+            lease = json.loads((self.directory / "heartbeat").read_text(encoding="utf-8"))
+            times = [W.FILETIME() for _ in range(4)]
+            api = C.WinDLL("kernel32", use_last_error=True).GetProcessTimes
+            api.argtypes = [W.HANDLE] + [C.POINTER(W.FILETIME)] * 4
+            api.restype = W.BOOL
+            if not api(handle, *(C.byref(value) for value in times)):
+                return False
+            ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            # .NET DateTime ticks begin in year 1; FILETIME ticks begin in 1601.
+            return lease["identity"] == f"{self.pid}:{ticks + 504911232000000000}"
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
 
     def publish(self, **changes):
         if (

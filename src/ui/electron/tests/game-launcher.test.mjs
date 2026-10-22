@@ -11,12 +11,26 @@ function fixture(t, options = {}) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "sector-game-"));
   fs.writeFileSync(path.join(folder, "Le Mans Ultimate.exe"), "never executed");
   const calls = [];
+  let discoveries = 0;
   const launcher = new GameLauncher({
     installation: () => folder,
-    discover: async () => [],
+    discover: async () =>
+      ++discoveries === 1
+        ? []
+        : [
+            {
+              pid: 42,
+              identity: "42:1",
+              eac: false,
+              executable: path.join(folder, "Le Mans Ultimate.exe"),
+            },
+          ],
     spawnChild: (...args) => {
       calls.push(args);
       const child = new EventEmitter();
+      child.pid = 42;
+      child.exitCode = null;
+      child.signalCode = null;
       child.unref = () => {};
       queueMicrotask(() => child.emit("spawn"));
       return child;
@@ -42,10 +56,11 @@ test("launches the selected executable once without a shell and awaits discovery
       detached: true,
       stdio: "ignore",
       shell: false,
+      windowsHide: true,
     },
   ]);
-  assert.equal(launcher.state.launching, true);
-  assert.equal(launcher.state.running, false);
+  assert.equal(launcher.state.launching, false);
+  assert.equal(launcher.state.running, true);
   launcher.observe([{ pid: 42 }]);
   assert.equal(launcher.state.launching, false);
   assert.equal(launcher.state.running, true);
@@ -65,7 +80,7 @@ test("existing game, invalid installation and preview never spawn a game", async
     const { launcher, calls } = fixture(t, options);
     const result = await launcher.launch();
     assert.equal(calls.length, 0);
-    assert.equal(result.ok, Boolean(options.discover));
+    assert.equal(result.ok, false);
   }
 });
 

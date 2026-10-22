@@ -43,7 +43,10 @@ class GameLauncher extends EventEmitter {
       if (this.stopped) return { ok: false, error: "Sector is closing." };
       if (games.length) {
         this.observe(games);
-        return { ok: true };
+        return {
+          ok: false,
+          error: "Close every LMU instance before starting an offline session.",
+        };
       }
       const child = this.spawnChild(
         // Directly open the game executable, not Steam's EAC launcher.
@@ -55,12 +58,34 @@ class GameLauncher extends EventEmitter {
           detached: true,
           stdio: "ignore",
           shell: false,
+          windowsHide: true,
         },
       );
       await new Promise((resolve, reject) => {
         child.once("error", reject);
         child.once("spawn", resolve);
       });
+      const verified = await this.discover();
+      const own = verified.length === 1 && verified[0];
+      if (
+        this.stopped ||
+        child.exitCode !== null ||
+        child.signalCode !== null ||
+        !own ||
+        own.pid !== child.pid ||
+        own.eac !== false ||
+        typeof own.identity !== "string" ||
+        !/^\d+:\d+$/.test(own.identity) ||
+        typeof own.executable !== "string" ||
+        path.resolve(own.executable).toLowerCase() !==
+          path.join(folder, "Le Mans Ultimate.exe").toLowerCase()
+      )
+        throw new Error(
+          "Fresh offline LMU process could not be verified. Close LMU and try again.",
+        );
+      this.ownedPid = child.pid;
+      this.emit("launched", own);
+      this.observe(verified);
       child.unref();
       // Process discovery, rather than a successful spawn, confirms the game opened.
       if (!this.stopped && !this.state.running)

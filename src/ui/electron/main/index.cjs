@@ -19,6 +19,9 @@ const { Overlays } = require("./overlays.cjs");
 const { Runtime, resolvePython, discoverGame } = require("./runtime.cjs");
 const setupStore = require("./onboarding.cjs");
 const { GameLauncher } = require("./game-launcher.cjs");
+const { OfflineSafety } = require("./offline-safety.cjs");
+const { waitForGameExit } = require("./clean-restart.cjs");
+const { resetAccess } = require("./reset-access.cjs");
 const { Diagnostics } = require("./diagnostics.cjs");
 const {
   defaults,
@@ -29,8 +32,13 @@ const {
 } = require("./settings.cjs");
 
 // Packaged resources are copied to a versioned writable workspace for native logs and IPC.
+const { verifyRuntime } = require("./runtime-integrity.cjs");
 const sourceRoot = path.resolve(__dirname, "../../../..");
 const packagedPreview = process.argv.includes("--preview");
+if (packagedPreview && process.env.SECTOR_PREVIEW_ROOT) {
+  fs.mkdirSync(process.env.SECTOR_PREVIEW_ROOT, { recursive: true });
+  app.setPath("userData", path.resolve(process.env.SECTOR_PREVIEW_ROOT));
+}
 const root = app.isPackaged
   ? path.join(
       app.getPath("userData"),
@@ -51,8 +59,10 @@ if (app.isPackaged) {
       if (!fs.existsSync(root)) throw error;
     }
   }
+  verifyRuntime(root, process.resourcesPath);
   process.env.SECTOR_PYTHON = path.join(root, "python/python.exe");
 }
+process.env.PYTHONDONTWRITEBYTECODE = "1";
 const preview = process.argv.includes("--preview");
 const smoke = preview && process.argv.includes("--smoke");
 const onboardingSmoke = smoke && process.argv.includes("--onboarding-smoke");
@@ -91,6 +101,11 @@ const setupFile =
     : path.join(path.dirname(settingsFile), "onboarding.json");
 let setup = setupStore.readSetup(setupFile);
 const setupReady = () => (preview && !onboardingSmoke) || setup.completed;
+const safety = new OfflineSafety({
+  file: path.join(path.dirname(settingsFile), "reset-safety.json"),
+  installation: () => setup.lmuPath,
+});
+let latestGames = [];
 const gameLauncher = new GameLauncher({
   installation: () => setup.lmuPath,
   discover: discoverGame,
@@ -98,13 +113,21 @@ const gameLauncher = new GameLauncher({
 });
 const discoverInstallation = async () => {
   if (!setupReady()) return [];
-  const games = await discoverGame(setup.lmuPath);
+  const games = await discoverGame();
+  latestGames = games;
+  safety.observe(games);
   gameLauncher.observe(games);
   return games;
 };
 const discoverOverlayGame = async () => {
   if (!setupReady()) return [];
   const games = await discoverGame(undefined, { telemetryOnly: true });
+  latestGames = games;
+  safety.observe(games);
+  if (!safety.enabled && runtime.enabled)
+    runtime.disable(
+      "Offline authorization lost. Close LMU before re-enabling.",
+    );
   gameLauncher.observe(games);
   return games;
 };
@@ -120,7 +143,15 @@ const runtime = new Runtime({
   settingsFile,
   getSettings: () => preferences,
   discover: discoverInstallation,
+  authorize: (game) => safety.allows(game),
+  beforeLaunch: (game) => safety.markModified(game),
+  onRevoke: () => safety.revoke(),
 });
+gameLauncher.on("launched", (game) => {
+  safety.captureLaunch(game);
+  latestGames = [game];
+});
+let transitionPending = false;
 let window;
 let tray;
 let quitting = false;
@@ -135,7 +166,10 @@ gameLauncher.on("state", (state) => {
   // or for the reset worker's next discovery cycle.
   if (state.eac && !runtime.eacBlocked) runtime.blockEac();
   if (window && !window.isDestroyed())
-    window.webContents.send("sector:game", state);
+    window.webContents.send("sector:game", {
+      ...state,
+      safety: safety.state(latestGames),
+    });
 });
 
 function showWindow() {
@@ -224,12 +258,100 @@ function installBridge() {
       keys,
       status: runtime.state,
       preview,
-      game: gameLauncher.state,
+      game: { ...gameLauncher.state, safety: safety.state(latestGames) },
       settingsError,
       onboarding: { required: !setupReady(), folder: setup.lmuPath },
     };
   });
-  handle("sector:launch-game", () => gameLauncher.launch());
+  handle("sector:launch-game", async () => {
+    if (preview || quitting || !setupReady() || transitionPending)
+      return { ok: false, error: "Offline launch is unavailable." };
+    try {
+      const games = await discoverInstallation();
+      if (games.length || safety.marker || safety.error || runtime.child)
+        throw new Error(
+          safety.error ||
+            "Close LMU and wait for the previous listener to stop first.",
+        );
+      return await gameLauncher.launch();
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+  handle("sector:reset-enable", async () => {
+    if (preview || quitting || !setupReady() || transitionPending)
+      return { ok: false, error: "Active Reset is unavailable." };
+    try {
+      const games = await discoverInstallation();
+      if (games.length !== 1)
+        throw new Error(
+          "Exactly one verified offline LMU session is required.",
+        );
+      const access = await resetAccess(games[0]);
+      if (!access.allowed) throw new Error(access.reason);
+      // Refresh after asynchronous context checks to reject a changed process.
+      const refreshed = await discoverInstallation();
+      if (refreshed.length !== 1 || refreshed[0].identity !== games[0].identity)
+        throw new Error("LMU identity changed during activation.");
+      if (quitting || transitionPending)
+        throw new Error("Activation canceled.");
+      safety.enable(refreshed[0], refreshed.length);
+      runtime.enable();
+      gameLauncher.publish({});
+      return { ok: true };
+    } catch (error) {
+      runtime.disable(error.message);
+      return { ok: false, error: error.message };
+    }
+  });
+  handle("sector:reset-disable", () => {
+    runtime.disable();
+    gameLauncher.publish({});
+    return { ok: true, restartRequired: Boolean(safety.marker) };
+  });
+  handle("sector:restart-online", async () => {
+    if (preview || quitting || transitionPending || !setupReady())
+      return { ok: false, error: "Restart is unavailable." };
+    transitionPending = true;
+    // Revoke before displaying any dialog, never leave writes active on cancel.
+    const modified = safety.marker;
+    runtime.disable();
+    gameLauncher.publish({});
+    try {
+      const answer = await dialog.showMessageBox(window, {
+        type: "warning",
+        title: "Restart LMU for online play",
+        message: "Close this LMU session and launch a new one through Steam?",
+        detail:
+          "Active Reset stays disabled. Unsaved session progress may be lost. Restarting removes in-memory modifications; it does not undo saved results or guarantee protection from bans.",
+        buttons: ["Cancel", "Close LMU and launch through Steam"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (answer.response !== 1) return { ok: false, canceled: true };
+      await waitForGameExit({ discover: discoverInstallation, game: modified });
+      // Require the worker to exit cooperatively too; never kill a restore worker.
+      for (let i = 0; runtime.child && i < 40; i++)
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      if (
+        runtime.child ||
+        (await discoverInstallation()).length ||
+        safety.marker ||
+        safety.error
+      )
+        throw new Error(
+          "Clean shutdown could not be verified. Online relaunch is blocked.",
+        );
+      if (quitting) throw new Error("Sector is closing.");
+      await shell.openExternal("steam://rungameid/2399420");
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    } finally {
+      transitionPending = false;
+      gameLauncher.publish({});
+    }
+  });
   handle("sector:report-bug", async () => {
     try {
       // Keep external navigation limited to the project's issue composer.
@@ -246,6 +368,10 @@ function installBridge() {
     try {
       if (!setupReady()) throw new Error("Complete first-launch setup first.");
       if (quitting) throw new Error("Sector is closing.");
+      if (runtime.enabled || runtime.child || safety.marker)
+        throw new Error(
+          "Close the reset session before changing installation.",
+        );
       const candidate = {
         lmuPath: setupStore.validateFolder(folder),
         completed: true,
@@ -416,6 +542,10 @@ if (!app.requestSingleInstanceLock()) {
           return new Response("Forbidden", { status: 403 });
         return net.fetch(pathToFileURL(file).toString());
       });
+      session.defaultSession.webRequest.onBeforeRequest(
+        { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
+        (_request, callback) => callback({ cancel: true }),
+      );
       session.defaultSession.setPermissionRequestHandler(
         (_contents, _permission, callback) => callback(false),
       );
@@ -528,7 +658,13 @@ if (!app.requestSingleInstanceLock()) {
       // Only the isolated preview process exposes a test driver, never the renderer.
       if (smoke)
         global.sectorTest = {
-          publish: (state) => runtime.publish(state),
+          publish: (state) => {
+            // Isolated preview driver only: exercise presentation without granting a worker.
+            const enabled = runtime.enabled;
+            runtime.enabled = true;
+            runtime.publish(state);
+            runtime.enabled = enabled;
+          },
           clearProtection: () => {
             runtime.eacBlocked = false;
             runtime.publish({ phase: "idle", blocked_reason: null });

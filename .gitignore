@@ -84,3 +84,8 @@ Desktop.ini
 
 # Original reference sheet; the app imports logos-transparent.png instead.
 /src/ui/electron/renderer/overlays/logos.png
+
+# LMU SDK headers are local proprietary build inputs, never repository source.
+**/SharedMemoryInterface.hpp
+**/InternalsPlugin.hpp
+**/PluginObjects.hpp

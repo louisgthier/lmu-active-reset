@@ -75,9 +75,9 @@ def supervise(args, run_host, audit_host, alive, wait=wait_for_driving, sleep=ti
         if stopped() or outcome == "user_stopped":
             break
         if outcome not in ("vehicle_reset", "context_changed"):
-            raise RuntimeError("Connection stopped unexpectedly. Reopen Active Reset to reconnect.")
-        args.desktop.publish(checkpoint=False, message="Vehicle changed. Save a new checkpoint.")
-        sleep(0.5)
+            raise RuntimeError("Connection stopped unexpectedly. Close LMU before reconnecting.")
+        args.desktop.publish(checkpoint=False, message="Session changed. Close LMU before enabling Active Reset again.")
+        return
 
 
 def main():
@@ -91,12 +91,12 @@ def main():
     parser.add_argument("--offline-launch-confirmed", action="store_true")
     parser.add_argument("--allow-writes", action="store_true")
     args = parser.parse_args()
-    if not args.offline_launch_confirmed or not args.allow_writes:
+    if not args.gui_session or not args.offline_launch_confirmed or not args.allow_writes:
         parser.error("Offline launch confirmation and write opt-in required")
     from sector.desktop.reset_desktop_session import DesktopSession
     from sector.runtime.physical_reset_hotkeys import virtual_key
 
-    args.desktop = DesktopSession(args.gui_session, settings_file=args.settings_file)
+    args.desktop = DesktopSession(args.gui_session, settings_file=args.settings_file, require_lease=True, pid=args.pid)
     handle = None
     try:
         if virtual_key(args.save_key) == virtual_key(args.restore_key):

@@ -9,7 +9,7 @@ export function GuidedTour({ saveKey, restoreKey, onTabChange, onFinish }) {
     {
       target: "launch",
       title: "Open LMU for Active Reset",
-      text: "Use Open LMU without EAC, then choose Offline Practice and enter DRIVE. Sector checks for Easy Anti-Cheat: when detected, Save/Restore and their shortcuts are blocked. Close the game before reopening it here. For online racing, open LMU normally with EAC; overlays remain available.",
+      text: "Start a fresh offline session without EAC here, enter Offline Practice and DRIVE, then explicitly enable Active Reset. Disabling stops commands but requires closing LMU to remove the resident host. Restart through Steam before online play. This does not restore saved results or guarantee protection from bans.",
       side: "bottom",
     },
     {

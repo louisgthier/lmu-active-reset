@@ -1,21 +1,19 @@
 import React, { useRef, useState } from "react";
-import { Icon } from "@iconify/react";
-import play from "@iconify-icons/solar/play-linear";
-import check from "@iconify-icons/solar/check-circle-linear";
 import "./reset-launch.css";
 
 export function ResetLaunch({ game, preview, disabled }) {
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  async function launch() {
+  const safety = game.safety || {};
+  async function action(method) {
     if (pending.current) return;
     pending.current = true;
     setBusy(true);
     setError("");
     try {
-      const result = await window.sector.launchGame();
-      if (!result.ok) setError(result.error);
+      const result = await window.sector[method]();
+      if (!result.ok && !result.canceled) setError(result.error);
     } catch (failure) {
       setError(failure.message);
     } finally {
@@ -23,24 +21,55 @@ export function ResetLaunch({ game, preview, disabled }) {
       setBusy(false);
     }
   }
+  const blocked = disabled || preview || busy;
   return (
     <div className="reset-launch" data-tour="launch">
       <button
         className="reset-launch-button"
-        disabled={disabled || preview || busy || game.running || game.launching}
-        title={
-          game.running
-            ? "Close LMU before launching it without EAC."
-            : preview
-              ? "Game launch is unavailable in preview."
-              : undefined
+        disabled={
+          blocked ||
+          game.running ||
+          game.launching ||
+          safety.restartRequired ||
+          Boolean(safety.error)
         }
-        onClick={launch}
+        onClick={() => action("launchGame")}
       >
-        <Icon icon={game.running ? check : play} aria-hidden="true" />
-        {game.launching || busy ? "Opening LMU..." : "Open LMU without EAC"}
+        {game.launching
+          ? "Opening LMU..."
+          : "Start offline session without EAC"}
       </button>
-      {(error || game.error) && <p role="alert">{error || game.error}</p>}
+      <button
+        className="reset-launch-button"
+        disabled={blocked || safety.enabled || !safety.canEnable}
+        onClick={() => action("enableReset")}
+      >
+        Enable Active Reset
+      </button>
+      <button
+        className="reset-launch-button"
+        disabled={blocked || !safety.enabled}
+        onClick={() => action("disableReset")}
+      >
+        Disable Active Reset
+      </button>
+      <button
+        className="reset-launch-button"
+        disabled={blocked || Boolean(safety.error)}
+        onClick={() => action("restartOnline")}
+      >
+        Restart LMU through Steam
+      </button>
+      <p role="status">
+        {safety.restartRequired
+          ? "This LMU process may contain the reset host. Close it before online play. Saved game data is not rolled back."
+          : safety.enabled
+            ? "Active Reset enabled for this offline session only."
+            : "Active Reset is disabled. Start a fresh offline session here, enter Offline Practice, then enable it explicitly."}
+      </p>
+      {(error || game.error || safety.error) && (
+        <p role="alert">{error || game.error || safety.error}</p>
+      )}
     </div>
   );
 }

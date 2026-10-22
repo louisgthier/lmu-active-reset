@@ -11,6 +11,39 @@ const root = path.resolve(ui, "../../..");
 const { version, license } = JSON.parse(
   fs.readFileSync(path.join(ui, "package.json")),
 );
+// Local prereleases must use verified source-built Sector native components.
+const nativeBuild = JSON.parse(
+  fs.readFileSync(path.join(root, "work/native-build-provenance.json"), "utf8"),
+);
+const digest = (file) =>
+  crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+if (
+  nativeBuild.schema !== 1 ||
+  nativeBuild.native_origin !==
+    "compiled from Sector source locally; no upstream Sector executable copied"
+)
+  throw new Error(
+    "Source-built native provenance required. Run Build-OfflineNative.ps1 first.",
+  );
+for (const name of [
+  "diagnostic-14200.exe",
+  "overlay-reader.exe",
+  "lmu-physical-reset-v28-25661166.dll",
+])
+  if (digest(path.join(root, "bin", name)) !== nativeBuild.binaries[name])
+    throw new Error(`Stale native build: ${name}`);
+for (const [relative, expected] of Object.entries(nativeBuild.native_sources)) {
+  if (
+    !relative.startsWith("src/native/") &&
+    !relative.startsWith("third_party/minhook/")
+  )
+    throw new Error("Invalid native source inventory.");
+  if (
+    relative.split("/").includes("..") ||
+    digest(path.join(root, relative)) !== expected
+  )
+    throw new Error(`Native source changed after build: ${relative}`);
+}
 const output = path.join(root, "releases", `Sector-${version}-win-x64`);
 if (fs.existsSync(output))
   throw new Error(
@@ -142,8 +175,8 @@ execFileSync(
 );
 await rcedit(path.join(output, "Sector.exe"), {
   icon: path.join(root, "assets/sector.ico"),
-  "file-version": version,
-  "product-version": version,
+  "file-version": version.split("-")[0],
+  "product-version": version.split("-")[0],
   "version-string": {
     ProductName: "Sector",
     FileDescription: "Sector",
@@ -177,10 +210,17 @@ fs.writeFileSync(
     "Active Reset and damage repair are experimental: bugs are expected and further fixes are planned.",
     "Includes an experimental wheel reattachment implementation. In-game validation is pending.",
     "",
-    "GETTING STARTED",
+    "LOCAL EXPERIMENTAL BUILD - NOT CERTIFIED SAFE",
+    "Sector native host/readers rebuilt locally from source with official Zig 0.16.0 and verified LMU SDK headers.",
+    "No guarantee against bans, unknown malware, or persistent session effects. No live-game validation performed.",
+    "Active Reset starts disabled. Launch a fresh offline session here, enter Offline Practice, then explicitly enable it.",
+    "Disable Active Reset stops new commands but does not unload the DLL. Close LMU before online play.",
+    "Restart LMU through Steam requires confirmed process exit. Saved game data is not rolled back.",
+    "",
+    "UPSTREAM REFERENCE (some controls differ in this local build)",
     "1. Extract the entire ZIP and open Sector.exe. Keep all files together.",
     "2. Confirm your Le Mans Ultimate folder during first-launch setup.",
-    "3. In Active Reset, choose Open LMU without EAC, then Offline > Practice and DRIVE in the game.",
+    "3. Start a fresh offline session here, choose Offline Practice and DRIVE, then click Enable Active Reset.",
     "4. With a healthy car, press F6 and wait for Checkpoint saved. Press F7 to return.",
     "5. Enable widgets in Overlay. Use Edit layout to arrange them, then Lock layout.",
     "",
@@ -205,9 +245,9 @@ fs.writeFileSync(
     "",
   ].join("\r\n"),
 );
+fs.writeFileSync(
+  path.join(output, "NATIVE-BUILD-PROVENANCE.json"),
+  JSON.stringify(nativeBuild, null, 2),
+);
 console.log(output);
-const retained = (process.env.SECTOR_KEEP_RELEASES || "")
-  .split(",")
-  .filter((value) => /^\d+\.\d+\.\d+$/.test(value));
-for (const name of pruneOldBuilds(path.dirname(output), version, retained))
-  console.log(`Removed older build: ${name}`);
+console.log("Local build: existing releases preserved.");

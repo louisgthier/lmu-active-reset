@@ -150,6 +150,39 @@ class DesktopTests(unittest.TestCase):
         self.session.publish(checkpoint=False, message="Vehicle reset.")
         self.assertFalse(json.loads((self.path / "status.json").read_text())["checkpoint"])
 
+    def test_required_lease_rejects_missing_malformed_expired_or_wrong_pid(self):
+        strict = DesktopSession(self.path, clock=lambda: 1000, require_lease=True, pid=7)
+        heartbeat = self.path / "heartbeat"
+        self.assertTrue(strict.stopped())
+        lease = dict(schema=1, pid=7, identity="7:123", expires_at_ms=1002000)
+        heartbeat.write_text(json.dumps(lease))
+        self.assertFalse(strict.stopped())
+        for invalid in ({**lease, "pid": 8}, {**lease, "identity": "8:123"},
+                        {**lease, "expires_at_ms": 1000000},
+                        {**lease, "expires_at_ms": 1003000},
+                        {**lease, "expires_at_ms": float("nan")}):
+            heartbeat.write_text(json.dumps(invalid))
+            self.assertTrue(strict.stopped())
+        heartbeat.write_text("not json")
+        self.assertTrue(strict.stopped())
+
+    def test_process_creation_identity_rejects_reused_pid(self):
+        import ctypes as C
+        import subprocess
+        current_pid = os.getpid()
+        ticks = subprocess.check_output([
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            f"(Get-Process -Id {current_pid}).StartTime.ToUniversalTime().Ticks",
+        ], text=True).strip()
+        strict = DesktopSession(self.path, clock=lambda: 1000, require_lease=True, pid=current_pid)
+        lease = dict(schema=1, pid=current_pid, identity=f"{current_pid}:{ticks}", expires_at_ms=1002000)
+        heartbeat = self.path / "heartbeat"
+        heartbeat.write_text(json.dumps(lease))
+        self.assertTrue(strict.process_matches(-1))
+        lease["identity"] = f"{current_pid}:{int(ticks)+1}"
+        heartbeat.write_text(json.dumps(lease))
+        self.assertFalse(strict.process_matches(-1))
+
     def test_close_and_crashed_gui_request_stop(self):
         self.assertFalse(self.session.stopped())
         self.session.clock = lambda: 1011
@@ -244,16 +277,15 @@ class DesktopTests(unittest.TestCase):
         keys.poll(True, True, False, True, False, 2)
         self.assertIsNone(keys.notice)
 
-    def test_lifecycle_exit_rearms_but_errors_never_retry(self):
+    def test_lifecycle_exit_requires_new_process_and_never_rearms(self):
         args = SimpleNamespace(pid=7, desktop=self.session)
         alive = Mock(return_value=True)
         run = Mock(side_effect=["vehicle_reset", "context_changed", RuntimeError("quarantined")])
         wait = Mock(return_value=True)
         audit = Mock()
-        with self.assertRaisesRegex(RuntimeError, "quarantined"):
-            supervise(args, run, audit, alive, wait=wait, sleep=lambda _: None)
-        self.assertEqual(run.call_count, 3)
-        self.assertEqual(audit.call_count, 3)
+        supervise(args, run, audit, alive, wait=wait, sleep=lambda _: None)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(audit.call_count, 1)
         self.assertEqual(args.revision, HOST_REVISION)
         self.assertFalse(self.session.state["checkpoint"])
         self.assertFalse(hasattr(args, "seconds"))

@@ -22,6 +22,8 @@ function fixture(t, options = {}) {
     getSettings: () => defaults,
     discover: async () => [{ pid: 42, identity: "42:1" }],
     admission: async () => ({ allowed: true }),
+    authorize: () => true,
+    beforeLaunch: () => {},
     now: () => clock,
     spawnChild: (...args) => {
       const child = new EventEmitter();
@@ -30,6 +32,7 @@ function fixture(t, options = {}) {
     },
     ...options,
   });
+  runtime.enabled = true;
   t.after(() => {
     runtime.dispose();
     fs.rmSync(root, { recursive: true, force: true });
@@ -154,6 +157,7 @@ test("waits for LMU, launches exactly once per process identity and passes safe 
   advance();
   await runtime.tick();
   assert.equal(spawned.length, 1);
+  runtime.enabled = true; // A new explicit activation is required after worker exit.
   games = [{ pid: 42, identity: "42:2" }];
   advance();
   await runtime.tick();
@@ -212,6 +216,7 @@ test("EAC with a hidden process path blocks shortcuts before admission and clear
   advance();
   await runtime.tick();
   assert.equal(runtime.state.phase, "idle");
+  runtime.enabled = true; // Simulate explicit activation for the new offline session.
   games = [{ pid: 43, identity: "43:2", eac: false }];
   advance();
   await runtime.tick();
@@ -284,7 +289,7 @@ test("reports native acknowledgement, retains failed-save checkpoint and invalid
   assert.equal(runtime.state.restore_count, 0);
 });
 
-test("quit writes cooperative stop and waits for child close while heartbeat continues", async (t) => {
+test("quit revokes authorization and waits for cooperative child close", async (t) => {
   const { runtime, spawned, advance } = fixture(t);
   await runtime.tick();
   let done = false;
@@ -293,10 +298,10 @@ test("quit writes cooperative stop and waits for child close while heartbeat con
   });
   assert.ok(fs.existsSync(path.join(runtime.session, "stop")));
   assert.equal(done, false);
-  fs.rmSync(path.join(runtime.session, "heartbeat"));
+  fs.rmSync(path.join(runtime.session, "heartbeat"), { force: true });
   advance();
   await runtime.tick();
-  assert.ok(fs.existsSync(path.join(runtime.session, "heartbeat")));
+  assert.ok(!fs.existsSync(path.join(runtime.session, "heartbeat")));
   spawned[0].child.emit("close", 0);
   await stop;
   assert.equal(done, true);

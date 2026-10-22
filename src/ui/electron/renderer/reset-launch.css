@@ -58,3 +58,15 @@
 .reset-blocked p + p {
   margin-top: 8px;
 }
+
+.reset-launch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 650px;
+}
+.reset-launch p {
+  flex-basis: 100%;
+  max-width: 650px;
+  line-height: 1.5;
+}

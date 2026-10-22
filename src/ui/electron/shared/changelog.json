@@ -1,5 +1,21 @@
 [
   {
+    "version": "1.0.1-offline.2",
+    "changes": [
+      "Rebuilt the Sector host and both native readers locally from source using official Zig 0.16.0 and verified LMU SDK headers. No upstream Sector executables included.",
+      "Passed native self-tests and the core fixture suite without starting LMU. Frame-driven host scenarios remain untested.",
+      "Packaging now requires matching source-build provenance for the native binaries. Offline guards and mandatory process exit before Steam relaunch are retained."
+    ]
+  },
+  {
+    "version": "1.0.1-offline.1",
+    "changes": [
+      "Local experimental build: explicit offline activation, process-bound expiring authorization and persistent restart requirement.",
+      "Disable stops new reset commands. Close LMU and verify process exit before relaunching through Steam. Saved game data is not restored.",
+      "Native host and readers reused from upstream v1.0.0; not rebuilt from source. No guarantee against bans or unknown malware."
+    ]
+  },
+  {
     "version": "1.0.0",
     "changes": [
       "Published the Windows portable app on prod with the updated interface, customizable overlays and Active Reset controls.",

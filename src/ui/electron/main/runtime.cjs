@@ -17,7 +17,7 @@ const emptyCheckpoint = {
 async function discoverGame(installation, { telemetryOnly = false } = {}) {
   // This fixed command never includes data from the renderer or settings.
   const command =
-    "$env:PSModulePath = (Join-Path $PSHOME 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath; $eacActive = @(Get-Process -Name 'EasyAntiCheat*' -ErrorAction SilentlyContinue).Count -gt 0; @(Get-Process -Name 'Le Mans Ultimate' -ErrorAction SilentlyContinue | ForEach-Object { $gamePath = $null; $gameIdentity = $null; try { $gamePath = $_.Path; $gameIdentity = ([string]$_.Id + ':' + $_.StartTime.ToUniversalTime().Ticks) } catch {}; @{pid=$_.Id; executable=$gamePath; identity=$gameIdentity; eac=$eacActive} }) | ConvertTo-Json -Compress";
+    "$env:PSModulePath = (Join-Path $PSHOME 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath; $ErrorActionPreference='Stop'; $all = @(Get-Process -ErrorAction Stop); $eacActive = @($all | Where-Object { $_.ProcessName -like 'EasyAntiCheat*' }).Count -gt 0; @($all | Where-Object { $_.ProcessName -eq 'Le Mans Ultimate' } | ForEach-Object { $gamePath = $null; $gameIdentity = $null; try { $gamePath = $_.Path; $gameIdentity = ([string]$_.Id + ':' + $_.StartTime.ToUniversalTime().Ticks) } catch {}; @{pid=$_.Id; executable=$gamePath; identity=$gameIdentity; eac=$eacActive} }) | ConvertTo-Json -Compress";
   const { stdout } = await execute(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", command],
@@ -66,6 +66,11 @@ class Runtime extends EventEmitter {
     spawnChild = spawn,
     now = Date.now,
     admission = resetAccess,
+    authorize = () => false,
+    beforeLaunch = () => {
+      throw new Error("Explicit offline authorization required.");
+    },
+    onRevoke = () => {},
   }) {
     super();
     Object.assign(this, {
@@ -77,12 +82,17 @@ class Runtime extends EventEmitter {
       spawnChild,
       now,
       admission,
+      authorize,
+      beforeLaunch,
+      onRevoke,
     });
     this.state = {
       ...emptyCheckpoint,
       phase: "idle",
       message: "",
     };
+    this.enabled = false;
+    this.verifiedUntil = 0;
     this.child = null;
     this.blockedIdentity = null;
     this.nextDiscovery = 0;
@@ -95,6 +105,8 @@ class Runtime extends EventEmitter {
   publish(patch) {
     if (patch.blocked_reason === "eac") this.eacBlocked = true;
     this.state = { ...this.state, ...patch };
+    if (!this.enabled && patch.phase === "active")
+      Object.assign(this.state, { phase: "stopped", ...emptyCheckpoint });
     if (this.eacBlocked)
       Object.assign(this.state, {
         phase: "blocked",
@@ -107,6 +119,45 @@ class Runtime extends EventEmitter {
     this.emit("status", this.state);
   }
 
+  enable() {
+    if (this.stopping || this.child)
+      throw new Error("Wait for the previous listener to stop.");
+    this.enabled = true;
+    this.blockedIdentity = null;
+    this.nextDiscovery = 0;
+    this.start();
+  }
+
+  disable(
+    reason = "Active Reset disabled. Close LMU before returning online.",
+  ) {
+    this.enabled = false;
+    this.verifiedUntil = 0;
+    this.onRevoke();
+    this.finishReset({ ok: false, error: reason });
+    if (this.session) {
+      fs.rmSync(path.join(this.session, "heartbeat"), { force: true });
+      fs.writeFileSync(path.join(this.session, "stop"), "");
+    }
+    this.publish({ phase: "stopped", ...emptyCheckpoint, message: reason });
+  }
+
+  writeLease() {
+    if (!this.enabled || this.stopping || this.now() >= this.verifiedUntil)
+      return;
+    const file = path.join(this.session, "heartbeat");
+    fs.writeFileSync(
+      `${file}.tmp`,
+      JSON.stringify({
+        schema: 1,
+        pid: this.game.pid,
+        identity: this.game.identity,
+        expires_at_ms: this.verifiedUntil,
+      }),
+    );
+    fs.renameSync(`${file}.tmp`, file);
+  }
+
   start() {
     if (this.timer) return;
     this.timer = setInterval(() => this.tick(), 250);
@@ -116,6 +167,10 @@ class Runtime extends EventEmitter {
   requestReset(action) {
     const reject = (error) => Promise.resolve({ ok: false, error });
     if (this.eacBlocked) return reject(EAC_MESSAGE);
+    if (!this.enabled || this.now() >= this.verifiedUntil)
+      return reject(
+        "Offline authorization expired. Disable Active Reset and restart LMU.",
+      );
     if (!["save", "restore"].includes(action))
       return reject("Unknown reset action.");
     if (
@@ -183,32 +238,53 @@ class Runtime extends EventEmitter {
     this.busy = true;
     try {
       if (this.child) {
-        if (this.now() >= this.nextHeartbeat) {
-          fs.writeFileSync(path.join(this.session, "heartbeat"), "");
-          this.nextHeartbeat = this.now() + 1000;
-        }
+        if (this.enabled && this.now() >= this.verifiedUntil)
+          this.disable(
+            "Safety checks expired. Close LMU before using Active Reset again.",
+          );
+        this.writeLease();
         this.readStatus();
         if (
+          this.enabled &&
           !this.stopping &&
           !this.protectionCheck &&
           this.now() >= this.nextDiscovery
         ) {
-          this.nextDiscovery = this.now() + 1500;
+          this.nextDiscovery = this.now() + 1000;
           const child = this.child;
-          // Discovery can take seconds; keep heartbeat and acknowledgements
-          // flowing while checking for a late EAC process.
-          this.protectionCheck = this.discover()
-            .then((games) => {
-              if (
-                !this.stopping &&
-                this.child === child &&
-                games.some((game) => game.eac === true)
-              )
-                this.blockEac();
-            })
-            .catch(() => {
-              // The native runner retains its own process/context checks.
-            })
+          const identity = this.game.identity;
+          this.protectionCheck = (async () => {
+            const games = await this.discover();
+            if (!this.enabled || this.child !== child) return;
+            if (games.some((game) => game.eac === true)) return this.blockEac();
+            if (
+              games.length !== 1 ||
+              games[0].identity !== identity ||
+              !this.authorize(games[0])
+            )
+              throw new Error(
+                "LMU process identity or offline authorization changed.",
+              );
+            const access = await this.admission(games[0]);
+            if (!access.allowed)
+              throw new Error(
+                access.reason || "Offline Practice is no longer confirmed.",
+              );
+            // An expired lease must never be revived by a slow asynchronous check.
+            if (
+              this.enabled &&
+              !this.stopping &&
+              this.child === child &&
+              this.now() < this.verifiedUntil
+            ) {
+              this.verifiedUntil = this.now() + 2500;
+              this.writeLease();
+            } else if (this.enabled)
+              throw new Error("Safety verification timed out.");
+          })()
+            .catch((error) =>
+              this.disable(`Safety verification failed: ${error.message}`),
+            )
             .finally(() => {
               this.protectionCheck = null;
             });
@@ -236,8 +312,9 @@ class Runtime extends EventEmitter {
         return;
       }
       const game = games[0];
+      if (!this.enabled || !this.authorize(game)) return;
       const access = await this.admission(game);
-      if (this.stopping) return;
+      if (this.stopping || !this.enabled || !this.authorize(game)) return;
       if (!access.allowed) {
         this.publish({
           phase: "waiting",
@@ -254,8 +331,12 @@ class Runtime extends EventEmitter {
         throw new Error("Invalid LMU process identity.");
       if (game.identity === this.blockedIdentity) return;
       this.blockedIdentity = game.identity;
+      this.beforeLaunch(game);
+      this.game = game;
+      this.verifiedUntil = this.now() + 2500;
       this.launch(game.pid);
     } catch (error) {
+      this.disable(error.message);
       this.publish({ phase: "error", message: error.message });
     } finally {
       this.busy = false;
@@ -263,6 +344,7 @@ class Runtime extends EventEmitter {
   }
 
   blockEac() {
+    this.disable(EAC_MESSAGE);
     this.eacBlocked = true;
     this.finishReset({ ok: false, error: EAC_MESSAGE });
     this.publish({});
@@ -272,7 +354,7 @@ class Runtime extends EventEmitter {
   launch(pid) {
     this.session = path.join(this.root, "work/gui", randomUUID());
     fs.mkdirSync(this.session, { recursive: true });
-    fs.writeFileSync(path.join(this.session, "heartbeat"), "");
+    this.writeLease();
     const logs = path.join(this.root, "logs");
     fs.mkdirSync(logs, { recursive: true });
     const name = `gui-${path.basename(this.session)}`;
@@ -326,6 +408,9 @@ class Runtime extends EventEmitter {
       if (this.child !== child) return;
       this.readStatus();
       this.finishReset({ ok: false, error: "Reset listener disconnected." });
+      this.enabled = false;
+      this.verifiedUntil = 0;
+      this.onRevoke();
       this.child = null;
       const previousError = this.state.phase === "error";
       this.publish({
@@ -365,6 +450,7 @@ class Runtime extends EventEmitter {
   }
 
   async stop() {
+    this.disable("Sector is closing. Restart LMU before online play.");
     this.stopping = true;
     this.finishReset({ ok: false, error: "Sector is closing." });
     if (!this.child) {

@@ -369,6 +369,12 @@ def run(args):
         ipc.magic, ipc.version, ipc.pid = MAGIC + args.revision - 1, 1, args.pid
         ipc.owner_thread = args.owner_thread
         ipc.heartbeat_ms = KERNEL.GetTickCount64()
+        if desktop.stopped() or not desktop.process_matches(handle):
+            raise ValueError("Offline process authorization expired before host load")
+        if any("easyanticheat" in m["name"].lower() or m["name"].lower().startswith("eac") for m in modules(args.pid)):
+            raise ValueError("EAC module present")
+        if desktop.stopped():
+            raise ValueError("Offline authorization was revoked before host load")
         load_observer(handle, args.pid, dll, ipc)
         for _ in range(100):
             if ipc.status >= 2:
@@ -411,6 +417,7 @@ def run(args):
         tail, telemetry = "", None
         last_completed = sent_id = 0
         prepared_at = 0.0
+        next_module_check = 0.0
         with (
             native_path.open() as incoming,
             Path(str(prefix) + ".reports.jsonl").open("w") as output,
@@ -424,6 +431,12 @@ def run(args):
                 if desktop.stopped():
                     outcome = "user_stopped"
                     break
+                if time.monotonic() >= next_module_check:
+                    ipc.allow = 0
+                    ipc.permit_writes = 0
+                    if any("easyanticheat" in m["name"].lower() or m["name"].lower().startswith("eac") for m in modules(args.pid)):
+                        raise ValueError("EAC module present")
+                    next_module_check = time.monotonic() + 1
                 desktop_action = desktop.take_request(
                     idle=bool(hotkeys) and not hotkeys.pending and ipc.completed_id == sent_id
                 )
@@ -434,6 +447,11 @@ def run(args):
                     prepared_at = 0.0
                     time.sleep(0.05)
                     continue
+                if desktop.stopped():
+                    ipc.allow = 0
+                    ipc.permit_writes = 0
+                    outcome = "user_stopped"
+                    break
                 before, game, after = observation
                 tail += incoming.read()
                 lines = tail.split("\n")
