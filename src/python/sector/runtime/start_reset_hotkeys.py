@@ -45,7 +45,7 @@ def wait_for_driving(stop_requested=lambda: False, stable_samples=1):
 
 
 def supervise(args, run_host, audit_host, alive, wait=wait_for_driving, sleep=time.sleep):
-    """Only a clean lifecycle/context exit can trigger automatic re-admission."""
+    """A clean stop may offer explicit reactivation; never automatically re-admit."""
 
     def stopped():
         return args.desktop.stopped() or not alive()
@@ -76,7 +76,7 @@ def supervise(args, run_host, audit_host, alive, wait=wait_for_driving, sleep=ti
             break
         if outcome not in ("vehicle_reset", "context_changed"):
             raise RuntimeError("Connection stopped unexpectedly. Close LMU before reconnecting.")
-        args.desktop.publish(checkpoint=False, message="Session changed. Close LMU before enabling Active Reset again.")
+        args.desktop.publish(checkpoint=False, message="Session changed. Enter Offline Practice and explicitly enable Active Reset again. Save a new checkpoint.")
         return
 
 

@@ -347,3 +347,87 @@ test("worker shutdown status cannot overwrite the cause of a fatal disconnect", 
   assert.equal(f.runtime.state.phase, "error");
   assert.equal(f.runtime.state.message, "publication failed");
 });
+
+test("clean session reactivation is explicit, single-use and retains the modified journal", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  f.runtime.onCleanStop = (game) => f.safety.offerRearm(game);
+  f.runtime.publish({ clean_shutdown: true, checkpoint: true });
+  f.workers[0].emit("close", 0);
+  assert.equal(f.runtime.enabled, false);
+  assert.equal(f.runtime.state.checkpoint, false);
+  assert.equal(f.safety.state([f.game]).canRearm, true);
+  assert.equal(f.safety.state([f.game]).restartRequired, true);
+  assert.equal(f.workers.length, 1);
+  const marker = fs.readFileSync(f.file, "utf8");
+  f.safety.enable(f.game, 1);
+  f.runtime.enabled = true;
+  f.runtime.nextDiscovery = 0;
+  f.runtime.blockedIdentity = null;
+  await f.runtime.tick();
+  assert.equal(f.workers.length, 2);
+  assert.equal(fs.readFileSync(f.file, "utf8"), marker);
+  assert.equal(f.runtime.state.checkpoint, false);
+  assert.throws(() => f.safety.markModified(f.game), /clean native shutdown/);
+});
+
+test("rearm capability never survives app restart, a changed process, EAC or ambiguity", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  f.safety.revoke();
+  assert.equal(f.safety.state([f.game]).canEnable, false);
+  assert.equal(f.safety.offerRearm(f.game), true);
+  for (const games of [
+    [{ ...f.game, identity: "42:124" }],
+    [{ ...f.game, eac: true }],
+    [{ ...f.game, executable: "other.exe" }],
+    [f.game, f.game],
+    [],
+  ])
+    assert.equal(f.safety.state(games).canEnable, false);
+  const restarted = new OfflineSafety(f.options);
+  assert.equal(restarted.offerRearm(f.game), false);
+  assert.equal(restarted.state([f.game]).canEnable, false);
+  f.safety.observe([]);
+  assert.equal(f.safety.offerRearm(f.game), false);
+});
+
+test("crashes, fatal state, EAC and app shutdown cannot offer reactivation", async (t) => {
+  for (const mode of ["crash", "error", "eac", "quitting", "unverified"]) {
+    const f = runtimeFixture(t);
+    f.activate();
+    await f.runtime.tick();
+    let offered = 0;
+    f.runtime.onCleanStop = () => offered++;
+    f.runtime.publish({ clean_shutdown: mode !== "unverified" });
+    if (mode === "error")
+      f.runtime.publish({ phase: "error", message: "quarantined" });
+    if (mode === "eac") f.runtime.eacBlocked = true;
+    if (mode === "quitting") f.runtime.stopping = true;
+    f.workers[0].emit("close", mode === "crash" ? 1 : 0);
+    assert.equal(offered, 0, mode);
+    assert.equal(f.runtime.enabled, false, mode);
+  }
+});
+
+test("a rejected fresh admission after reactivation cannot launch another worker", async (t) => {
+  const f = runtimeFixture(t);
+  f.activate();
+  await f.runtime.tick();
+  f.safety.revoke();
+  f.safety.offerRearm(f.game);
+  f.safety.enable(f.game, 1);
+  f.runtime.enabled = false;
+  f.workers[0].emit("close", 0);
+  f.runtime.admission = async () => ({ allowed: false, reason: "online" });
+  // A new explicit click must still pass the ordinary admission checks.
+  f.safety.offerRearm(f.game);
+  f.safety.enable(f.game, 1);
+  f.runtime.enabled = true;
+  f.runtime.blockedIdentity = null;
+  f.runtime.nextDiscovery = 0;
+  await f.runtime.tick();
+  assert.equal(f.workers.length, 1);
+});

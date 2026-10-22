@@ -20,6 +20,7 @@ class DesktopSession:
             "schema_version": 1,
             "phase": "waiting",
             "checkpoint": False,
+            "clean_shutdown": False,
             "saved_speed_kmh": None,
             "saved_at": None,
             "restore_count": 0,

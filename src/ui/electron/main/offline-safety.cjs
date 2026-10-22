@@ -11,6 +11,10 @@ class OfflineSafety {
     this.ownedPid = null;
     this.identity = null;
     this.marker = null;
+    this.launchIdentity = null;
+    this.launchPid = null;
+    this.rearmIdentity = null;
+    this.resumeAuthorized = false;
     this.error = "";
     try {
       const marker = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -41,8 +45,8 @@ class OfflineSafety {
       !/^\d+:\d+$/.test(game.identity)
     )
       throw new Error("A verified fresh LMU launch is required.");
-    this.ownedPid = pid;
-    this.ownedIdentity = game.identity;
+    this.ownedPid = this.launchPid = pid;
+    this.ownedIdentity = this.launchIdentity = game.identity;
     this.identity = null;
   }
   observe(games) {
@@ -60,6 +64,8 @@ class OfflineSafety {
     ) {
       fs.rmSync(this.file, { force: true });
       this.marker = null;
+      this.launchIdentity = null;
+      this.launchPid = null;
       this.revoke();
     }
     if (this.enabled && !this.allows(games[0], games.length)) this.revoke();
@@ -80,12 +86,48 @@ class OfflineSafety {
         path.resolve(this.installation(), "Le Mans Ultimate.exe").toLowerCase()
     );
   }
+  offerRearm(game) {
+    // This in-memory capability is issued only after our worker confirms clean
+    // native shutdown. The persistent modified-process journal is never cleared.
+    if (
+      !this.marker ||
+      this.error ||
+      game?.identity !== this.marker.identity ||
+      game.identity !== this.launchIdentity ||
+      game.pid !== this.launchPid
+    )
+      return false;
+    this.rearmIdentity = game.identity;
+    return true;
+  }
+  rearmEligible(game, count = 1) {
+    return Boolean(
+      this.marker &&
+      this.rearmIdentity &&
+      this.rearmIdentity === game?.identity &&
+      game.identity === this.launchIdentity &&
+      game.pid === this.launchPid &&
+      count === 1 &&
+      game.eac === false &&
+      typeof game.executable === "string" &&
+      path.resolve(game.executable).toLowerCase() ===
+        path
+          .resolve(this.installation(), "Le Mans Ultimate.exe")
+          .toLowerCase() &&
+      !this.error,
+    );
+  }
   enable(game, count) {
-    if (this.marker || !this.eligible(game, count))
+    const resuming = this.rearmEligible(game, count);
+    if (!resuming && (this.marker || !this.eligible(game, count)))
       throw new Error(
         this.error ||
           "Close LMU and start a new offline session from Sector first.",
       );
+    this.ownedPid = game.pid;
+    this.ownedIdentity = game.identity;
+    this.rearmIdentity = null;
+    this.resumeAuthorized = resuming;
     this.identity = game.identity;
     this.enabled = true;
   }
@@ -97,8 +139,16 @@ class OfflineSafety {
     );
   }
   markModified(game) {
-    if (this.marker || !this.allows(game))
+    if (!this.allows(game))
       throw new Error("Offline launch authorization expired.");
+    if (this.marker) {
+      if (!this.resumeAuthorized || this.marker.identity !== game.identity)
+        throw new Error(
+          "A clean native shutdown is required before reactivation.",
+        );
+      this.resumeAuthorized = false;
+      return;
+    }
     const marker = { schema: 1, pid: game.pid, identity: game.identity };
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const temporary = `${this.file}.tmp`;
@@ -113,6 +163,8 @@ class OfflineSafety {
     this.marker = marker; // Persist BEFORE starting a worker which could inject.
   }
   revoke() {
+    this.rearmIdentity = null;
+    this.resumeAuthorized = false;
     this.enabled = false;
     this.identity = null;
     this.ownedPid = null;
@@ -122,7 +174,10 @@ class OfflineSafety {
     return {
       enabled: this.enabled,
       restartRequired: Boolean(this.marker),
-      canEnable: !this.marker && this.eligible(games[0], games.length),
+      canEnable:
+        (!this.marker && this.eligible(games[0], games.length)) ||
+        this.rearmEligible(games[0], games.length),
+      canRearm: this.rearmEligible(games[0], games.length),
       error: this.error,
     };
   }

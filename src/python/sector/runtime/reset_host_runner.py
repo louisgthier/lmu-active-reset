@@ -224,6 +224,12 @@ def shutdown_failure(previous, exit_code, status, restored):
     return previous
 
 
+def clean_shutdown_verified(failure, exit_code, status, error, restored):
+    """A clean-stop receipt never means DLL unload or saved-data rollback."""
+    return (not failure and exit_code is None and status == 3 and error == 0
+            and bool(restored) and all(value is True for value in restored.values()))
+
+
 def run(args):
     from sector.runtime.physical_reset_hotkeys import (
         HotkeyCommands,
@@ -236,6 +242,8 @@ def run(args):
     from sector.desktop.reset_feedback import Feedback, report_feedback
 
     desktop = getattr(args, "desktop", None) or DesktopSession(None)
+    clean_shutdown = False
+    desktop.publish(clean_shutdown=False)
     expected_fields = expected_restore_fields(args.revision)
     hotkeys = HotkeyCommands(expected_fields) if getattr(args, "hotkeys", False) else None
     feedback = Feedback(
@@ -624,6 +632,7 @@ def run(args):
             if exit_code is not None:
                 restored = dict.fromkeys(restored)
             failure = shutdown_failure(failure, exit_code, ipc.status, restored)
+            clean_shutdown = clean_shutdown_verified(failure, exit_code, ipc.status, ipc.error, restored)
             if ipc.reserved == 1 and not failure and outcome != "user_stopped":
                 outcome = "vehicle_reset"
                 desktop.publish(checkpoint=False, message="Vehicle reset. Save a new checkpoint.")
@@ -657,6 +666,8 @@ def run(args):
         k.CloseHandle(handle)
     if failure:
         raise RuntimeError(failure)
+    # Publish only after native drain, prologue checks and all controller cleanup.
+    desktop.publish(checkpoint=False, clean_shutdown=clean_shutdown)
     return outcome
 
 

@@ -277,7 +277,7 @@ class DesktopTests(unittest.TestCase):
         keys.poll(True, True, False, True, False, 2)
         self.assertIsNone(keys.notice)
 
-    def test_lifecycle_exit_requires_new_process_and_never_rearms(self):
+    def test_lifecycle_exit_never_automatically_rearms(self):
         args = SimpleNamespace(pid=7, desktop=self.session)
         alive = Mock(return_value=True)
         run = Mock(side_effect=["vehicle_reset", "context_changed", RuntimeError("quarantined")])

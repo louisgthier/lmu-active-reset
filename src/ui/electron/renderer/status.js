@@ -7,6 +7,7 @@ export function statusView(status) {
     paused: "Waiting for driving",
     stopping: "Disconnecting",
     stopped: "Disconnected",
+    session_ended: "Ready to reactivate",
     error: "Connection stopped",
     blocked: "Active Reset unavailable",
   };

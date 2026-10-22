@@ -104,6 +104,27 @@ try {
   await panel
     .getByRole("button", { name: "Change save shortcut, F6", exact: true })
     .waitFor();
+  await app.evaluate(() =>
+    global.sectorTest.window().webContents.send("sector:game", {
+      running: true,
+      launching: false,
+      eac: false,
+      safety: {
+        enabled: false,
+        canEnable: true,
+        canRearm: true,
+        restartRequired: true,
+      },
+    }),
+  );
+  await panel
+    .getByRole("button", { name: "Reactivate Active Reset", exact: true })
+    .waitFor();
+  await panel.getByText(/Previous host stopped cleanly/).waitFor();
+  assert.equal(
+    await app.evaluate(() => global.sectorTest.hasListener()),
+    false,
+  );
   await page.screenshot({ path: path.join(work, "offline-controls.png") });
   fs.writeFileSync(
     path.join(work, "verification.json"),

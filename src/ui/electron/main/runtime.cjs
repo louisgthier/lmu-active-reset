@@ -72,6 +72,7 @@ class Runtime extends EventEmitter {
       throw new Error("Explicit offline authorization required.");
     },
     onRevoke = () => {},
+    onCleanStop = () => {},
   }) {
     super();
     Object.assign(this, {
@@ -87,6 +88,7 @@ class Runtime extends EventEmitter {
       authorize,
       beforeLaunch,
       onRevoke,
+      onCleanStop,
     });
     this.state = {
       ...emptyCheckpoint,
@@ -429,6 +431,7 @@ class Runtime extends EventEmitter {
       phase: "waiting",
       ...emptyCheckpoint,
       message: "LMU detected. Enter driving in offline Practice.",
+      clean_shutdown: false,
     });
     const child = this.child;
     child.once("error", (error) => {
@@ -447,15 +450,32 @@ class Runtime extends EventEmitter {
       this.verifiedUntil = 0;
       this.onRevoke();
       this.child = null;
+      const resumable =
+        code === 0 &&
+        !this.stopping &&
+        !this.eacBlocked &&
+        failure === null &&
+        this.state.phase !== "error" &&
+        this.state.clean_shutdown === true;
+      if (resumable) this.onCleanStop(this.game);
       const previousError = failure !== null || this.state.phase === "error";
       this.publish({
         ...emptyCheckpoint,
-        phase: previousError ? "error" : code === 0 ? "stopped" : "error",
+        clean_shutdown: false,
+        phase: previousError
+          ? "error"
+          : resumable
+            ? "session_ended"
+            : code === 0
+              ? "stopped"
+              : "error",
         message: previousError
           ? (failure ?? this.state.message)
-          : code === 0
-            ? "Disconnected."
-            : `Listener stopped (${code ?? "launch error"}). Reopen Sector after checking the session log.`,
+          : resumable
+            ? "Previous host stopped cleanly. Enter Offline Practice and explicitly enable Active Reset; save a new checkpoint."
+            : code === 0
+              ? "Disconnected."
+              : `Listener stopped (${code ?? "launch error"}). Reopen Sector after checking the session log.`,
       });
       this.emit("detached");
     });

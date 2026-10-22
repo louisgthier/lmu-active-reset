@@ -147,6 +147,10 @@ const runtime = new Runtime({
   authorize: (game) => safety.allows(game),
   beforeLaunch: (game) => safety.markModified(game),
   onRevoke: () => safety.revoke(),
+  onCleanStop: (game) => {
+    safety.offerRearm(game);
+    gameLauncher.publish({});
+  },
 });
 gameLauncher.on("launched", (game) => {
   safety.captureLaunch(game);
