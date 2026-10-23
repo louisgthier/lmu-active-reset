@@ -14,19 +14,21 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-73B7FF?style=for-the-badge" alt="License: MIT"></a>
 </p>
 
+**Community offline-practice fork.** This fork adds guarded offline activation, wheel-button bindings and checkpoint best-attempt timing. Download the ready-to-install Windows build from [this fork's Releases page](https://github.com/louisgthier/lmu-active-reset/releases). Original Sector is credited in the links above.
+
 **Practice your driving and keep useful race information in view.**
 
 **Active Reset is experimental.** Check the
-[Releases page](https://github.com/sector-lmu/Sector/releases) for downloadable
-builds and their known limitations. The `dev` branch can include changes that
-have not yet been published as a download.
+[Releases page](https://github.com/louisgthier/lmu-active-reset/releases) for downloadable
+builds and their known limitations. This fork's changes are maintained on
+`harden-offline-reset`; source commits may precede published downloads.
 
 Sector is a Windows app for **Le Mans Ultimate**. Save a point on track and return
 to it to practice a corner or section again. Add customizable widgets over the
 game to see standings, lap times, pedal inputs and more.
 
 <p align="center">
-  <a href="https://github.com/sector-lmu/Sector/releases"><strong>Download Sector for Windows</strong></a>
+  <a href="https://github.com/louisgthier/lmu-active-reset/releases"><strong>Download Sector for Windows</strong></a>
   &nbsp;&nbsp;&nbsp;
   <a href="docs/README.md">User guide</a>
   &nbsp;&nbsp;&nbsp;
@@ -39,17 +41,24 @@ game to see standings, lap times, pedal inputs and more.
 
 You need **Windows 64-bit** and an installed copy of **Le Mans Ultimate**.
 
-1. Open the [Releases page](https://github.com/sector-lmu/Sector/releases) and look
-   for a Windows download named `Sector-<version>-win-x64.zip` under **Assets**.
-2. Download the ZIP, right-click it in Windows and choose **Extract All**.
-3. Open the extracted folder and double-click **`Sector.exe`**.
+1. Open [this fork's Releases page](https://github.com/louisgthier/lmu-active-reset/releases).
+2. Download **`Sector-<version>-win-x64-Setup.exe`** under Assets and open it.
+3. Choose Install, then open Sector using the Start menu or desktop shortcut.
 
-Sector runs directly from its folder: there is no installer and no additional
-software to install. Keep the entire folder together; you can create a shortcut
-to `Sector.exe` on your desktop.
+The Setup EXE includes all required application files. It installs for your Windows
+account under `%LOCALAPPDATA%\Programs\Sector` without administrator rights.
+Pin the installed Sector shortcut to your taskbar. Future installers update the
+same path and preserve preferences; quit Sector completely before updating.
 
-Choose the **Windows app ZIP**, not GitHub's **Source code** downloads. You do
-not need to download the repository or install Python, Node.js or development tools.
+Alternatively, download `Sector-<version>-win-x64.zip`, choose Extract All, and run
+`Sector.exe` inside the extracted folder. **Keep the entire folder together.**
+Moving only `Sector.exe` to the desktop will not work; create a shortcut instead.
+
+Choose the installer or portable ZIP, not GitHub's Source code downloads. No
+Python, Node.js, SDK or development tools are required. Downloads are unsigned;
+Windows may show an unknown-publisher prompt. See [Windows downloads](docs/WINDOWS_DOWNLOADS.md)
+for updates, checksums and limitations. This build remains experimental and
+cannot guarantee protection against bans or unknown malware.
 
 ## 🚦 First launch
 
@@ -235,9 +244,11 @@ or launch `Sector.exe` again.
 ## Update Sector
 
 1. Close the running version with **Quit Sector**, rather than leaving it in the background.
-2. Download the new Windows ZIP from [Releases](https://github.com/sector-lmu/Sector/releases).
-3. Extract it into a new folder and launch its `Sector.exe`.
-4. Update your desktop shortcut if it still points to the old version.
+2. Download the new `Sector-<version>-win-x64-Setup.exe` from [Releases](https://github.com/louisgthier/lmu-active-reset/releases).
+3. Run it to update the existing installation. Your executable path and pinned shortcut stay the same.
+
+For a portable installation, extract the new ZIP into a new folder and update
+your shortcut to that folder's `Sector.exe` instead.
 
 Your shortcut assignments, overlay layout and first-launch choices are retained.
 Keep the files from each package together; do not copy only the new EXE over an
@@ -246,7 +257,7 @@ making a new checkpoint.
 
 ### Sector 1.0.0
 
-Download the [Windows portable package](https://github.com/sector-lmu/Sector/releases/tag/v1.0.0).
+Original upstream release: [Sector 1.0.0](https://github.com/sector-lmu/Sector/releases/tag/v1.0.0).
 Version 1.0.0 brings the current desktop and overlay features to `prod`.
 Active Reset and damage repair remain experimental. Restart LMU after upgrading
 and save a fresh checkpoint with a healthy car.
@@ -271,7 +282,7 @@ verification. See the [verification notes](docs/TEST_RESULTS.md) for the tested
 scenarios and current limits.
 
 Open **Help → Changelog** for the complete in-app version history. The
-[release notes](https://github.com/sector-lmu/Sector/releases)
+[release notes](https://github.com/louisgthier/lmu-active-reset/releases)
 list published downloads and their current limitations.
 
 ## Need help?
