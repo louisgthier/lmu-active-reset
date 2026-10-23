@@ -10,6 +10,7 @@ const sample = (et, distance, patch = {}) => ({
   track: "Fixture",
   session: 1,
   length: 1000,
+  et,
   player: { id: 1, model: "Fixture car", et, speed: 180 },
   cars: [{ id: 1, player: true, distance, best: 80 }],
   ...patch,
@@ -218,4 +219,116 @@ test("finish presentation uses violet only for a new record and an explicit froz
   );
   assert.equal(slow.deltaFg, "#FF5D5D");
   assert.equal(slow.timingTitle, "FINISHED");
+});
+
+test("first restore records the reference when the teleport precedes every status poll", () => {
+  const { model } = fixture();
+  model.update(sample(11.1, 130));
+  model.update(sample(12.1, 160));
+  assert.equal(model.update(sample(12.2, 100)).valid, false);
+  model.update(sample(12.3, 103));
+  model.onStatus(ack("restore", 4));
+  const value = model.update(sample(12.4, 106));
+  assert.equal(value.reference, true);
+  assert.equal(value.finishDistance, 60);
+  assert.ok(Math.abs(value.seconds - 0.2) < 1e-8);
+  assert.ok(Math.abs(value.delta) < 1e-8);
+});
+
+test("missing handoff telemetry preserves the reference candidate and checkpoint", () => {
+  const { model } = fixture();
+  model.update(sample(11.1, 130));
+  model.update(sample(12.1, 160));
+  model.update({ connected: false });
+  model.update(sample(12.2, 100));
+  model.onStatus(ack("restore", 4));
+  assert.equal(model.update(sample(13.2, 130)).reference, true);
+  assert.equal(model.value().finishDistance, 60);
+  model.update({ connected: false });
+  assert.equal(model.value().valid, false);
+  assert.ok(Math.abs(model.value().bestSeconds - 2) < 1e-8);
+});
+
+test("preparing and held handoffs retain the first landing until acknowledgement", () => {
+  for (const preparing of [true, false]) {
+    const { model } = fixture();
+    model.update(sample(11.1, 130));
+    model.update(sample(12.1, 160));
+    if (preparing) model.onStatus({ ...ack("save", 1), reset_action: 2 });
+    else model.hold();
+    model.update(sample(12.2, 100));
+    model.update(sample(12.3, 103));
+    model.onStatus(ack("restore", 4));
+    const value = model.update(sample(12.4, 106));
+    assert.equal(value.reference, true);
+    assert.equal(value.finishDistance, 60);
+    assert.ok(Math.abs(value.seconds - 0.2) < 1e-8);
+  }
+});
+
+test("a rejected or expired teleport candidate cannot establish a reference", () => {
+  for (const reject of [true, false]) {
+    const { model, advance } = fixture();
+    model.update(sample(11.1, 130));
+    model.update(sample(12.1, 160));
+    model.update(sample(12.2, 100));
+    if (reject) model.onStatus(ack("rejected", 3));
+    else advance(1600);
+    model.onStatus(ack("restore", 4));
+    const value = model.update(sample(12.3, 103));
+    assert.equal(value.reference, false);
+    assert.equal(value.finishDistance, null);
+  }
+});
+
+function liveFrame(et, start, speed) {
+  const scoring = Math.floor((et + 1e-9) * 5) / 5;
+  const raw = sample(et, 100 + speed * (scoring - start));
+  raw.et = scoring;
+  raw.player.speed = speed * 3.6;
+  raw.cars[0].liveProgress = {
+    et,
+    travel: speed * (et - scoring),
+    speed,
+  };
+  return raw;
+}
+
+test("60 Hz telemetry with 5 Hz scoring gives a continuous distance-matched delta", () => {
+  const model = new CheckpointTiming();
+  model.onStatus(ack("save", 1));
+  model.update(liveFrame(10, 10, 50));
+  for (let i = 1; i <= 240; i++) model.update(liveFrame(10 + i / 60, 10, 50));
+  model.onStatus(ack("restore", 4));
+  model.update(liveFrame(20, 20, 45));
+  let previous = 0;
+  for (let i = 1; i <= 240; i++) {
+    const elapsed = i / 60;
+    const value = model.update(liveFrame(20 + elapsed, 20, 45));
+    assert.equal(value.valid, true);
+    assert.ok(
+      Math.abs(value.delta - elapsed * 0.1) < 1e-7,
+      `frame ${i}: ${value.delta}`,
+    );
+    assert.ok(value.delta >= previous - 1e-8);
+    previous = value.delta;
+  }
+});
+
+test("scoring-only fallback holds the paired clock and survives temporary projection loss", () => {
+  const model = new CheckpointTiming();
+  model.onStatus(ack("save", 1));
+  model.update(liveFrame(10, 10, 50));
+  model.update(liveFrame(10.1, 10, 50));
+  const missing = liveFrame(10.15, 10, 50);
+  missing.cars[0].liveProgress = null;
+  const held = model.update(missing);
+  assert.equal(held.valid, true);
+  assert.ok(Math.abs(held.seconds - 0.1) < 1e-8);
+  assert.ok(
+    Math.abs(model.update(liveFrame(10.2, 10, 50)).seconds - 0.2) < 1e-8,
+  );
+  const scoringOnly = liveFrame(10.25, 10, 50);
+  scoringOnly.cars[0].liveProgress = null;
+  assert.ok(Math.abs(model.update(scoringOnly).seconds - 0.2) < 1e-8);
 });

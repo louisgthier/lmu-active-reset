@@ -47,4 +47,4 @@ function leaderboardGap(car, leader, scoringTime) {
   };
 }
 
-module.exports = { relativeDistance, leaderboardGap };
+module.exports = { relativeDistance, leaderboardGap, movement };

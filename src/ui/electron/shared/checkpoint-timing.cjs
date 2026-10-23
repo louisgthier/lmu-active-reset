@@ -1,4 +1,5 @@
 const finite = Number.isFinite;
+const { movement } = require("./live-gaps.cjs");
 
 // Practice timing only. No game memory or native scoring state is modified.
 class CheckpointTiming {
@@ -14,9 +15,11 @@ class CheckpointTiming {
     this.bestSeconds = null;
     this.pending = null;
     this.lastAck = null;
+    this.lastRejection = null;
     this.suspended = false;
     this.latest = null;
     this.restoreCandidate = null;
+    this.restoreObserved = null;
   }
   onStatus(state) {
     if (state.checkpoint === false) {
@@ -25,14 +28,15 @@ class CheckpointTiming {
     }
     const preparing = [2, 3].includes(state.reset_action);
     if (preparing && !this.suspended && this.attempt?.valid)
-      this.restoreCandidate = {
-        ...this.attempt,
-        samples: this.attempt.samples.map((point) => ({ ...point })),
-      };
-    if (state.last_event === "rejected") this.restoreCandidate = null;
-    this.suspended = preparing;
+      this.captureRestoreCandidate();
     const action = state.last_event;
     const key = `${state.log_prefix}:${state.report_id}:${action}`;
+    if (action === "rejected" && key !== this.lastRejection) {
+      this.restoreCandidate = null;
+      this.restoreObserved = null;
+      this.lastRejection = key;
+    }
+    this.suspended = preparing;
     if (
       !state.checkpoint ||
       !["save", "restore"].includes(action) ||
@@ -47,9 +51,17 @@ class CheckpointTiming {
       this.finishDistance = null;
       this.bestSeconds = null;
       this.restoreCandidate = null;
+      this.restoreObserved = null;
     } else {
       if (!this.checkpoint) return;
-      const previous = this.restoreCandidate || this.attempt;
+      const recent =
+        this.restoreCandidate &&
+        this.now() - this.restoreCandidate.capturedAt <= 1500;
+      const previous = this.restoreCandidate
+        ? recent
+          ? this.restoreCandidate
+          : null
+        : this.attempt;
       if (!this.finishDistance && previous?.valid && previous.progress >= 5) {
         this.finishDistance = previous.progress;
         this.bestSeconds = previous.elapsed;
@@ -64,6 +76,19 @@ class CheckpointTiming {
     this.attempt = null;
     this.restoreCandidate = null;
     this.suspended = false;
+    // Telemetry and command acknowledgements arrive on independent streams.
+    // Retain the first observed landing instead of starting late at the next poll.
+    const landing = this.restoreObserved;
+    this.restoreObserved = null;
+    if (
+      action === "restore" &&
+      landing &&
+      this.now() - landing.observedAt <= 1500
+    ) {
+      this.startAttempt(landing.sample);
+      this.pending = null;
+      return;
+    }
     this.pending = {
       action,
       deadline: this.now() + 1500,
@@ -84,9 +109,17 @@ class CheckpointTiming {
       !finite(p.speed)
     )
       return null;
+    const live = movement(car, raw.et);
+    // Pair distance with its own timestamp. A scoring-only frame must never
+    // advance a high-rate clock against an unchanged low-rate distance.
+    const et = live ? live.et : raw.et;
+    if (!finite(et)) return null;
     return {
-      et: p.et,
-      distance: ((car.distance % raw.length) + raw.length) % raw.length,
+      et,
+      live: Boolean(live),
+      distance:
+        (((car.distance + (live?.travel ?? 0)) % raw.length) + raw.length) %
+        raw.length,
       length: raw.length,
       speed: Math.abs(p.speed) / 3.6,
       identity: JSON.stringify([
@@ -101,6 +134,40 @@ class CheckpointTiming {
   hold() {
     if (this.attempt) this.attempt.held = true;
   }
+  captureRestoreCandidate() {
+    this.restoreCandidate = {
+      ...this.attempt,
+      samples: this.attempt.samples.map((point) => ({ ...point })),
+      capturedAt: this.now(),
+    };
+  }
+  nearCheckpoint(sample) {
+    const offset = Math.abs(sample.distance - this.checkpoint.distance);
+    return (
+      Math.min(offset, sample.length - offset) <=
+      Math.max(20, sample.speed * 0.5)
+    );
+  }
+  observeRestore(sample) {
+    if (!this.checkpoint || !this.nearCheckpoint(sample)) return;
+    if (this.attempt?.valid && !this.restoreCandidate)
+      this.captureRestoreCandidate();
+    if (this.restoreCandidate && !this.restoreObserved)
+      this.restoreObserved = { sample, observedAt: this.now() };
+  }
+  startAttempt(sample) {
+    this.attempt = {
+      valid: true,
+      et: sample.et,
+      distance: sample.distance,
+      elapsed: 0,
+      progress: 0,
+      samples: [{ distance: 0, seconds: 0 }],
+      comparison: this.reference,
+      comparisonBest: this.bestSeconds,
+      finished: false,
+    };
+  }
   invalidate(reason) {
     if (this.attempt) {
       this.attempt.valid = false;
@@ -110,13 +177,25 @@ class CheckpointTiming {
   update(raw) {
     const sample = this.sample(raw);
     if (!sample) {
-      this.reset();
-      return null;
+      // A missing player during a restore is not evidence of a new session.
+      // Preserve the checkpoint/reference; reject the interrupted attempt.
+      if (!this.attempt?.finished) {
+        if (this.attempt?.valid) this.captureRestoreCandidate();
+        this.invalidate("Checkpoint telemetry unavailable");
+      }
+      return this.value();
     }
     this.latest = sample;
     if (this.checkpoint && sample.identity !== this.checkpoint.identity) {
       this.reset();
       return null;
+    }
+    if (
+      this.restoreCandidate &&
+      this.now() - this.restoreCandidate.capturedAt > 1500
+    ) {
+      this.restoreCandidate = null;
+      this.restoreObserved = null;
     }
     if (this.attempt?.finished) return this.value();
     if (raw.paused || !raw.driving) {
@@ -138,40 +217,43 @@ class CheckpointTiming {
       )
         return this.value();
       if (this.pending.action === "restore") {
-        const offset = Math.abs(sample.distance - this.checkpoint.distance);
-        if (
-          Math.min(offset, sample.length - offset) >
-          Math.max(20, sample.speed * 0.5)
-        )
-          return this.value();
+        if (!this.nearCheckpoint(sample)) return this.value();
       } else this.checkpoint = { ...sample };
-      this.attempt = {
-        valid: true,
-        et: sample.et,
-        distance: sample.distance,
-        elapsed: 0,
-        progress: 0,
-        samples: [{ distance: 0, seconds: 0 }],
-        comparison: this.reference,
-        comparisonBest: this.bestSeconds,
-        finished: false,
-      };
+      this.startAttempt(sample);
       this.pending = null;
       return this.value();
     }
     const a = this.attempt;
-    if (!a?.valid || this.suspended) return this.value();
+    if (!a?.valid) {
+      if (this.restoreCandidate) this.observeRestore(sample);
+      return this.value();
+    }
+    if (this.suspended) {
+      if (
+        Math.abs(sample.distance - a.distance) >
+        Math.max(15, sample.speed * 0.5)
+      )
+        this.observeRestore(sample);
+      return this.value();
+    }
     if (a.held) {
       a.held = false;
       a.et = sample.et;
       const offset = Math.abs(sample.distance - a.distance);
-      if (Math.min(offset, sample.length - offset) > 5)
+      if (Math.min(offset, sample.length - offset) > 5) {
+        this.observeRestore(sample);
         this.invalidate("Position changed while paused");
+      }
       return this.value();
     }
     const dt = sample.et - a.et;
+    // A temporary loss of projection may expose an older scoring anchor.
+    // Wait for it to catch up rather than treating it as a simulation rewind.
+    if (!sample.live && dt <= 0 && finite(raw.et) && raw.player.et > sample.et)
+      return this.value();
     if (dt === 0) return this.value();
     if (dt < 0 || dt > 1.5) {
+      this.observeRestore(sample);
       this.invalidate("Simulation time discontinuity");
       return this.value();
     }
@@ -179,6 +261,7 @@ class CheckpointTiming {
     if (step < -sample.length / 2) step += sample.length;
     if (step > sample.length / 2) step -= sample.length;
     if (step < -3 || step > Math.max(15, sample.speed * dt * 2 + 5)) {
+      this.observeRestore(sample);
       this.invalidate("Position discontinuity or reverse driving");
       return this.value();
     }
